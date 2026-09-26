@@ -37,8 +37,12 @@ class EventStore:
         if eid:
             ev = self.items[eid]
         else:
+            # volgnummer per jaar van het evenement: hoogste bestaande + 1 (na het verwijderen van
+            # het laatste evenement wordt dat nummer dus opnieuw gebruikt, er ontstaan geen gaten)
             year = data["start"][:4]
-            n = self.seq.get(year, 0) + 1
+            used = [int(e["number"].rsplit("-", 1)[1]) for e in self.items.values()
+                    if str(e.get("number", "")).startswith(f"EV-{year}-")]
+            n = max(used, default=0) + 1
             self.seq[year] = n
             eid = uuid.uuid4().hex[:10]
             ev = {"id": eid, "number": f"EV-{year}-{n:03d}", "created": now}

@@ -211,6 +211,8 @@ async def test_evenement_rapport_en_pdf(hass, setup, hass_client, hass_read_only
     assert not (await rows.receive_json())["success"]
     r = await ws(type=f"{DOMAIN}/event/delete", event_id=eid)
     assert r["success"] and (await ws(type=f"{DOMAIN}/events"))["result"]["events"] == []
+    r = await ws(type=f"{DOMAIN}/event/save", **draft)            # nummer van het verwijderde evenement opnieuw
+    assert r["result"]["event"]["number"] == f"EV-{d.year}-001"
 
 
 async def test_evenement_zonder_kwartieren_per_uur(hass, setup):
