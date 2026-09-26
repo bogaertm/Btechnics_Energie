@@ -266,40 +266,73 @@ class Energy:
 
     # ---------- evenementen ----------
     async def event_report(self, ev: dict) -> dict:
-        """Verbruik van een evenement: per kwartier (begin en einde afgerond op het kwartier), met de
-        meterstanden bij begin en einde. Waar geen kwartieren zijn (voor de integratie bestond), per uur."""
+        """Verbruik van een evenement per kwartier (begin en einde afgerond op het kwartier), met de
+        meterstanden bij begin en einde.
+
+        - Loopt het evenement nog, dan wordt gemeten tot het laatste volledige kwartier (ongoing).
+        - Ontbreken er kwartieren binnen volle uren (bv. Home Assistant stond even uit), dan komt het
+          verbruik van dat uur uit de uurstatistieken en wordt het gelijk over de 4 kwartieren verdeeld.
+        - Zijn er geen kwartieren (voor de integratie bestond), dan per uur; begin en einde op het uur.
+        Meterstanden: uit de kwartieren, anders uit de uurstatistieken (stand op het einde van het uur)."""
         sel = self._sel(ev.get("meters"))
         start = int(dt_util.parse_datetime(ev["start"]).timestamp())
         end = int(dt_util.parse_datetime(ev["end"]).timestamp())
+        now = int(dt_util.utcnow().timestamp())
         qs, qe = quarter_bounds(start, end)
+        ongoing = False
+        last_full_q = now - now % 900
+        if qe > last_full_q:
+            ongoing = True
+            qe = max(qs, last_full_q)
         quarters = await self.hass.async_add_executor_job(self.db.between, qs, qe)
-        states = await self.hass.async_add_executor_job(self.db.states, qs - 900, qe)
-        expected = (qe - qs) // 900
-        complete = [ts for ts in range(qs, qe, 900) if ts in quarters and all(m in quarters[ts] for m in sel)]
-        resolution = "kwartier"
+        qstates = await self.hass.async_add_executor_job(self.db.states, qs - 900, qe)
+        missing = [ts for ts in range(qs, qe, 900) if not (ts in quarters and all(m in quarters[ts] for m in sel))]
+        missing_hours = sorted({ts - ts % 3600 for ts in missing})
+        hybrid_ok = bool(quarters) and all(h >= qs and h + 3600 <= qe for h in missing_hours)
+
+        # uurstatistieken (verbruik en stand) rond de periode: nodig voor ontbrekende uren en meterstanden
+        hs = qs - qs % 3600
+        he = qe + (-qe) % 3600
+        hmeters, _, hstates = await self._energy(dt_util.utc_from_timestamp(hs - 3600), dt_util.utc_from_timestamp(he), "hour",
+                                                 with_state=True)
+
         per_meter = {m: 0.0 for m in sel}
-        series = []
-        if len(complete) == expected:
+        series, estimated = [], []
+        if not missing or hybrid_ok:
+            resolution, step = "kwartier", 900
             for ts in range(qs, qe, 900):
-                per = {m: quarters[ts][m] for m in sel}
+                h = ts - ts % 3600
+                if h in missing_hours:
+                    per = {m: (hmeters.get(m, {}).get(h) or 0.0) / 4 for m in sel}
+                    if ts == h:
+                        estimated.append(h)
+                else:
+                    per = {m: quarters[ts][m] for m in sel}
                 for m, v in per.items():
                     per_meter[m] += v
-                series.append({"ts": ts, "meters": per})
-            step = 900
+                series.append({"ts": ts, "meters": per, **({"estimated": True} if h in missing_hours else {})})
+            f, t = qs, qe
         else:
-            # uurwaarden uit de statistieken (bewaren alles), begin en einde afgerond op het uur
-            resolution = "uur"
-            hs, he = start - start % 3600, end + (-end) % 3600
-            meters, _ = await self._energy(dt_util.utc_from_timestamp(hs), dt_util.utc_from_timestamp(he), "hour")
-            for ts in range(hs, he, 3600):
-                per = {m: meters.get(m, {}).get(ts) for m in sel}
+            resolution, step = "uur", 3600
+            f = start - start % 3600
+            t = end + (-end) % 3600
+            if ongoing:
+                t = max(f, now - now % 3600)
+            for ts in range(f, t, 3600):
+                per = {m: hmeters.get(m, {}).get(ts) for m in sel}
                 per = {m: v for m, v in per.items() if v is not None}
                 for m, v in per.items():
                     per_meter[m] += v
                 series.append({"ts": ts, "meters": per})
-            qs, qe, step = hs, he, 3600
-        begin_state = {m: (states.get(qs - 900) or {}).get(m) for m in sel} if resolution == "kwartier" else {m: None for m in sel}
-        end_state = {m: (states.get(qe - 900) or {}).get(m) for m in sel} if resolution == "kwartier" else {m: None for m in sel}
+
+        def reading(m, at):
+            q = (qstates.get(at - 900) or {}).get(m)
+            if q is not None:
+                return q
+            if at % 3600 == 0:
+                return hstates.get(m, {}).get(at - 3600)
+            return None
+
         total = sum(per_meter.values())
         price = ev.get("price")
         if price is None:
@@ -307,14 +340,17 @@ class Energy:
         peak = None
         if resolution == "kwartier":
             for x in series:
+                if x.get("estimated"):
+                    continue
                 kw = sum(x["meters"].values()) * 4
                 if peak is None or kw > peak["kw"]:
                     peak = {"kw": round(kw, 3), "ts": x["ts"]}
         names = {m["id"]: m["name"] for m in self.meters}
         return {
-            "event": ev, "from": qs, "to": qe, "resolution": resolution, "step": step,
+            "event": ev, "from": f, "to": t, "resolution": resolution, "step": step, "ongoing": ongoing,
+            "estimated_hours": estimated,
             "meters": [{"id": m, "name": names.get(m, m), "kwh": round(per_meter[m], 3),
-                        "begin": begin_state.get(m), "end": end_state.get(m)} for m in sel],
+                        "begin": reading(m, f), "end": reading(m, t)} for m in sel],
             "total": round(total, 3), "price": price, "amount": round(total * price, 2) if price is not None else None,
             "peak": peak, "series": series,
         }

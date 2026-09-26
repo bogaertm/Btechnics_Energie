@@ -97,9 +97,11 @@ def build_pdf(report: dict, local, created: datetime) -> bytes:
         ("Organisator", ev.get("organizer") or "-"),
         ("Contact", ev.get("contact") or "-"),
         ("Periode", f"{when(real_start)} tot {when(real_end)}"),
-        ("Gemeten", f"{when(start)} tot {when(end)} ({mins // 60}u{mins % 60:02d}), afgerond op het {report['resolution']}"),
+        ("Gemeten", f"{when(start)} tot {when(end)} ({mins // 60}u{mins % 60:02d}), afgerond op het {report['resolution']}"
+                    + (" (loopt nog)" if report.get("ongoing") else "")),
         ("Locatie", ", ".join(m["name"] for m in report["meters"])),
     ]
+    rows = [r for r in rows if r[1] and r[1] != "-"]      # lege velden niet afdrukken
     for label, value in rows:
         pdf.set_font("Helvetica", size=10)
         pdf.set_text_color(*GREY)
@@ -160,6 +162,12 @@ def build_pdf(report: dict, local, created: datetime) -> bytes:
               "tussen begin en einde, afgerond op het volle kwartier.") if report["resolution"] == "kwartier" else (
               "Gemeten met de energiemeters van TrefpuntFestival vzw, per uur (voor deze periode zijn geen kwartierwaarden "
               "beschikbaar); begin en einde zijn afgerond op het volle uur.")
+    if report.get("estimated_hours"):
+        method += f" Voor {len(report['estimated_hours'])} uur ontbraken kwartierwaarden; daar is het uurverbruik gebruikt."
+    if report.get("ongoing"):
+        method += f" Het evenement loopt nog: gemeten tot {when(end)}. Dit is een tussentijds overzicht."
+    method += " Meterstand is de stand van de meter (som van de drie fasen) op dat moment."
+
     pdf.multi_cell(W, 4.6, method, new_x="LMARGIN", new_y="NEXT")
 
     # handtekeningen

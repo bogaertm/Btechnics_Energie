@@ -223,3 +223,33 @@ async def test_evenement_zonder_kwartieren_per_uur(hass, setup):
     rep = r["result"]
     # 10u00 tot 13u00 per uur: 3 x (3 + 0,5) kWh
     assert rep["resolution"] == "uur" and rep["total"] == 10.5 and rep["price"] == 0.36
+    # meterstanden uit de uurstatistieken: stand op 10u00 en op 13u00 (voorbouw: 3 fasen x 1 kWh per uur)
+    v = rep["meters"][0]
+    assert v["begin"] is not None and v["end"] - v["begin"] == pytest.approx(9.0)
+
+
+async def test_evenement_dat_nog_loopt(hass, setup):
+    ws = setup["ws"]
+    en = hass.data[DOMAIN]
+    now = int(dt_util.utcnow().timestamp())
+    q_now = now - now % 900
+    s = q_now - 8 * 900
+    en.db.upsert({s + 900 * i: {"voorbouw": 0.5, "achterbouw": 0.25} for i in range(-1, 8)},
+                 {s + 900 * i: {"voorbouw": 100 + 0.5 * (i + 1), "achterbouw": 50 + 0.25 * (i + 1)} for i in range(-1, 8)})
+    loc = lambda ts: dt_util.as_local(dt_util.utc_from_timestamp(ts)).strftime("%Y-%m-%dT%H:%M")
+    draft = {"name": "Loopt nog", "start": loc(s), "end": loc(now + 3 * 3600), "meters": ["voorbouw"]}
+    rep = (await ws(type=f"{DOMAIN}/event/report", draft=draft))["result"]
+    assert rep["ongoing"] and rep["resolution"] == "kwartier" and rep["to"] == q_now and rep["total"] == 4.0
+    assert rep["meters"][0]["begin"] == 100.0 and rep["meters"][0]["end"] == 104.0
+
+
+async def test_evenement_met_gat_in_kwartieren(hass, setup):
+    """Een uur zonder kwartieren (Home Assistant uit) wordt aangevuld met de uurwaarde."""
+    ws = setup["ws"]
+    en = hass.data[DOMAIN]
+    d = dt_util.now().date() - timedelta(days=2)
+    s = int(dt_util.start_of_local_day(d).timestamp())
+    en.db.upsert({s + 900 * i: {"voorbouw": 0.75, "achterbouw": 0.125} for i in range(96) if not 40 <= i < 44})   # 10u00-11u00 ontbreekt
+    draft = {"name": "Gat", "start": f"{d.isoformat()}T09:00", "end": f"{d.isoformat()}T12:00", "meters": ["voorbouw"]}
+    rep = (await ws(type=f"{DOMAIN}/event/report", draft=draft))["result"]
+    assert rep["resolution"] == "kwartier" and len(rep["estimated_hours"]) == 1 and rep["total"] == pytest.approx(9.0)

@@ -885,7 +885,7 @@ class BtechnicsEnergieCard extends HTMLElement {
     const mins = Math.round((r.to - r.from) / 60);
     el.innerHTML = `
       <div class="kpis">
-        <div class="kpi"><div class="l">Verbruik</div><div class="v">${kwh(r.total, 2)}</div><div class="l">${f.dateTime(r.from)} tot ${f.time(r.to)}${f.isoOf(r.to - 1) !== f.isoOf(r.from) ? ` (${dayLabel(f.isoOf(r.to - 1))})` : ""}</div></div>
+        <div class="kpi"><div class="l">Verbruik${r.ongoing ? " (loopt nog)" : ""}</div><div class="v">${kwh(r.total, 2)}</div><div class="l">${f.dateTime(r.from)} tot ${f.time(r.to)}${f.isoOf(r.to - 1) !== f.isoOf(r.from) ? ` (${dayLabel(f.isoOf(r.to - 1))})` : ""}</div></div>
         <div class="kpi"><div class="l">Prijs per kWh</div><div class="v">${r.price != null ? EUR4.format(r.price) : "-"}</div><div class="l">${r.event.price != null ? "eigen prijs" : "tarief van die dag"}</div></div>
         <div class="kpi"><div class="l">Bedrag</div><div class="v">${eur(r.amount)}</div><div class="l">zoals op de PDF</div></div>
         <div class="kpi"><div class="l">Duur</div><div class="v">${Math.floor(mins / 60)}u${two(mins % 60)}</div><div class="l">afgerond op het ${r.resolution}</div></div>
@@ -897,14 +897,16 @@ class BtechnicsEnergieCard extends HTMLElement {
           <td class="num">${kwh(m.kwh, 2)}</td><td class="num">${r.price != null ? eur(m.kwh * r.price) : "-"}</td></tr>`).join("")}
       </tbody>${meters.length > 1 ? `<tfoot><tr><td>Totaal</td><td></td><td></td><td class="num">${kwh(r.total, 2)}</td><td class="num">${eur(r.amount)}</td></tr></tfoot>` : ""}</table></div>
       <h3>Verloop per ${r.resolution}</h3>${this._legend(meters)}<div class="chart" id="evchart"></div>
-      <div class="note">${r.resolution === "kwartier" ? "Som van de kwartierwaarden tussen begin en einde, afgerond op het volle kwartier. De meterstanden zijn de stand van de meter (som van de drie fasen) op dat moment."
-        : "Voor deze periode zijn er geen kwartierwaarden; het verbruik is per uur opgeteld, begin en einde afgerond op het volle uur. Meterstanden zijn dan niet beschikbaar."}</div>`;
+      <div class="note">${r.ongoing ? `<b>Het evenement loopt nog:</b> gemeten tot ${f.dateTime(r.to)}. ` : ""}${r.resolution === "kwartier" ? "Som van de kwartierwaarden tussen begin en einde, afgerond op het volle kwartier."
+        : "Voor deze periode zijn er geen kwartierwaarden; het verbruik is per uur opgeteld, begin en einde afgerond op het volle uur."}
+        ${(r.estimated_hours || []).length ? ` Voor ${r.estimated_hours.length} uur ontbraken kwartierwaarden (Home Assistant stond uit); daar is het uurverbruik gebruikt en gelijk verdeeld.` : ""}
+        De meterstanden zijn de stand van de meter (som van de drie fasen) op dat moment.</div>`;
     const quarter = r.step === 900;
     barChart(el.querySelector("#evchart"), {
       labels: r.series.map((x) => f.time(x.ts)), unit: quarter ? "kW" : "kWh", every: quarter ? 4 : 1,
       series: meters.map((m) => ({ name: m.name, color: c[this._meterIndex(m.id) % c.length], values: r.series.map((x) => (x.meters[m.id] || 0) * (quarter ? 4 : 1)) })),
       tip: (i) => { const x = r.series[i]; const sum = Object.values(x.meters).reduce((a, b) => a + b, 0);
-        return `<b>${f.dateTime(x.ts)} tot ${f.time(x.ts + r.step)}</b><br>${kwh(sum, 3)}${quarter ? `, gemiddeld ${kw(sum * 4)}` : ""}<br>${this._meterSplit(meters, x.meters, (v) => kwh(v, 3))}`; },
+        return `<b>${f.dateTime(x.ts)} tot ${f.time(x.ts + r.step)}</b><br>${kwh(sum, 3)}${quarter ? `, gemiddeld ${kw(sum * 4)}` : ""}${x.estimated ? " (uit uurwaarde)" : ""}<br>${this._meterSplit(meters, x.meters, (v) => kwh(v, 3))}`; },
     });
   }
 
