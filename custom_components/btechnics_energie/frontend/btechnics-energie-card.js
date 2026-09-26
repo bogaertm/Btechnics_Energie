@@ -1100,12 +1100,47 @@ class BtechnicsEnergieCard extends HTMLElement {
 }
 
 // Home Assistant laadt deze module soms voor de kaartregistratie klaar is: veilig definieren.
+const CARD_VERSION = "0.3.1";
+// Een oude kopie van de pagina (service worker) kan eerst een oudere versie van dit script laden
+// (vastgesteld 26/09/2026: v0.2.2 uit de cache voor v0.3.0). Een custom element kan niet opnieuw gedefinieerd
+// worden: de al geregistreerde klasse laten steunen op deze code en bestaande kaarten opnieuw opbouwen.
+function upgradeCard(reg) {
+  const R = reg.get("btechnics-energie");
+  if (!R || R.__btxVersion === CARD_VERSION || R.prototype instanceof BtechnicsEnergieCard) return;
+  const v = (x) => String(x || "0").split(".").map(Number);
+  const [a, b] = [v(CARD_VERSION), v(R.__btxVersion)];
+  const i = a.findIndex((n, k) => n !== (b[k] || 0));
+  if (R.__btxVersion && (i < 0 || a[i] < (b[i] || 0))) return;     // enkel naar een nieuwere versie
+  try {
+    Object.setPrototypeOf(R.prototype, BtechnicsEnergieCard.prototype);
+    Object.setPrototypeOf(R, BtechnicsEnergieCard);
+    R.__btxVersion = CARD_VERSION;
+    const walk = (root) => {
+      for (const el of root.querySelectorAll("*")) {
+        if (el.tagName === "BTECHNICS-ENERGIE" && el._hass) {
+          clearInterval(el._timer);
+          el._timer = null;
+          try { el._init(); } catch (e) { /* volgende kaart */ }
+        }
+        if (el.shadowRoot) walk(el.shadowRoot);
+      }
+    };
+    walk(document);
+  } catch (e) { /* oude versie laten staan */ }
+}
 function register() {
   const reg = window.customElements;
-  if (!reg.get("btechnics-energie")) reg.define("btechnics-energie", class extends BtechnicsEnergieCard {});
+  if (!reg.get("btechnics-energie")) {
+    const R = class extends BtechnicsEnergieCard {};
+    R.__btxVersion = CARD_VERSION;
+    reg.define("btechnics-energie", R);
+  }
+  upgradeCard(reg);
   window.customCards = window.customCards || [];
   if (!window.customCards.find((c) => c.type === "btechnics-energie")) {
     window.customCards.push({ type: "btechnics-energie", name: "Btechnics Energie", description: "Verbruik, kost per dag, fasen en kwartierpieken" });
   }
 }
 register();
+let registerTries = 0;
+const registerTimer = setInterval(() => { try { register(); } catch (e) { /* volgende poging */ } if (++registerTries >= 60) clearInterval(registerTimer); }, 1000);
