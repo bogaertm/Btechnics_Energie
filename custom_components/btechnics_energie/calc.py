@@ -50,6 +50,21 @@ def quarters_from_5min(rows_by_meter: dict, tz=None, states: dict | None = None)
     return out
 
 
+def gap_quarters(rows_by_meter: dict, quarters, window_start: int) -> dict:
+    """Per kwartier: 1 als het direct na een gat in de 5-minuutgegevens komt (Home Assistant of de meter
+    was weg: het eerste blok daarna bevat dan al het verbruik van de hele onderbreking, wat een valse piek
+    geeft), 0 als het blok ervoor er is, None als dat niet te bepalen is (begin van het venster)."""
+    have = {m: {int(ts) for ts, _ in rows} for m, rows in rows_by_meter.items()}
+    out = {}
+    for q in quarters:
+        prev = int(q) - 300
+        if prev < window_start:
+            out[q] = None
+        else:
+            out[q] = 1 if any(prev not in slots for slots in have.values()) else 0
+    return out
+
+
 def quarter_bounds(start: int, end: int) -> tuple:
     """Begin naar beneden en einde naar boven afronden op het kwartier."""
     return start - start % 900, end + (-end) % 900

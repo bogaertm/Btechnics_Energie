@@ -125,13 +125,16 @@ def _event_times(hass, data):
     """Begin en einde (datum en uur zonder tijdzone = tijdzone van Home Assistant) naar ISO met tijdzone."""
     out = {}
     for k in ("start", "end"):
-        dt = dt_util.parse_datetime(data[k])
-        if dt is None:
+        try:
+            dt = dt_util.parse_datetime(data[k])
+        except (ValueError, OverflowError):
+            dt = None
+        if dt is None or not 2000 <= dt.year <= 2100:
             raise ValueError(f"ongeldige datum en uur: {data[k]}")
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=dt_util.get_default_time_zone())
         out[k] = dt_util.as_local(dt).isoformat(timespec="minutes")
-    if out["end"] <= out["start"] and dt_util.parse_datetime(out["end"]) <= dt_util.parse_datetime(out["start"]):
+    if dt_util.parse_datetime(out["end"]) <= dt_util.parse_datetime(out["start"]):
         raise ValueError("het einde moet na het begin liggen")
     if (dt_util.parse_datetime(out["end"]) - dt_util.parse_datetime(out["start"])).days > 62:
         raise ValueError("een evenement duurt maximaal 62 dagen")
@@ -149,9 +152,10 @@ async def ws_events(hass, connection, msg):
     for ev in en.events.list():
         try:
             rep = await en.event_report(ev)
-            items.append({**ev, "total": rep["total"], "amount": rep["amount"], "price_used": rep["price"]})
-        except Exception:  # noqa: BLE001  een kapot evenement mag de lijst niet blokkeren
-            items.append(ev)
+            items.append({**ev, "total": rep["total"], "amount": rep["amount"], "price_used": rep["price"],
+                          "ongoing": rep["ongoing"], "not_started": rep["not_started"]})
+        except Exception as err:  # noqa: BLE001  een kapot evenement mag de lijst niet blokkeren
+            items.append({**ev, "error": str(err)[:200]})
     connection.send_result(msg["id"], {"events": items, "meters": en._meta(), "tariffs": en.tariff_items})
 
 
@@ -213,4 +217,9 @@ async def ws_event_report(hass, connection, msg):
         except (vol.Invalid, ValueError) as err:
             connection.send_error(msg["id"], "invalid_format", str(err))
             return
-    connection.send_result(msg["id"], await en.event_report(ev))
+    try:
+        rep = await en.event_report(ev)
+    except ValueError as err:
+        connection.send_error(msg["id"], "invalid_format", str(err))
+        return
+    connection.send_result(msg["id"], rep)

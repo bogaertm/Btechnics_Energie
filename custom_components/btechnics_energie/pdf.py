@@ -14,6 +14,27 @@ LINE = (200, 200, 200)
 FILL = (243, 243, 243)
 
 
+# Tekens buiten Windows-1252 (Helvetica kent enkel die): naar een gelijkaardig teken, anders "?".
+_SUBST = {"\u2192": "->", "\u2190": "<-", "\u2264": "<=", "\u2265": ">=", "\u2212": "-", "\u00a0": " ",
+          "\u2011": "-", "\u2010": "-", "\u2248": "~", "\u2715": "x", "\u2714": "v", "\u2713": "v",
+          "\u0141": "L", "\u0142": "l", "\u0110": "D", "\u0111": "d", "\u0131": "i", "\u00d8": "O"}
+
+
+def safe(text) -> str:
+    """Tekst die zeker in Windows-1252 past (naam, organisator, opmerking kunnen emoji of andere tekens bevatten)."""
+    text = "".join(_SUBST.get(ch, ch) for ch in str(text))
+    out = []
+    for ch in text:
+        try:
+            ch.encode("cp1252")
+            out.append(ch)
+        except UnicodeEncodeError:
+            import unicodedata
+            base = unicodedata.normalize("NFKD", ch).encode("cp1252", "ignore").decode("cp1252")
+            out.append(base or ("" if unicodedata.category(ch) in ("So", "Sk", "Mn", "Cf") else "?"))
+    return "".join(out)
+
+
 def nl_num(v: float, d: int = 2) -> str:
     s = f"{v:,.{d}f}"
     return s.replace(",", "X").replace(".", ",").replace("X", ".")
@@ -39,6 +60,9 @@ def build_pdf(report: dict, local, created: datetime) -> bytes:
     doc_name = f"Afrekening elektriciteit {ev.get('number', '')}".strip()
 
     class Doc(FPDF):
+        def normalize_text(self, text):
+            return super().normalize_text(safe(text))
+
         def footer(self):
             self.set_y(-14)
             self.set_draw_color(*LINE)
@@ -163,7 +187,12 @@ def build_pdf(report: dict, local, created: datetime) -> bytes:
               "Gemeten met de energiemeters van TrefpuntFestival vzw, per uur (voor deze periode zijn geen kwartierwaarden "
               "beschikbaar); begin en einde zijn afgerond op het volle uur.")
     if report.get("estimated_hours"):
-        method += f" Voor {len(report['estimated_hours'])} uur ontbraken kwartierwaarden; daar is het uurverbruik gebruikt."
+        method += (f" Voor {len(report['estimated_hours'])} uur ontbraken kwartierwaarden; die kwartieren zijn geschat "
+                   "uit het uurverbruik.")
+    if report.get("missing_hours"):
+        method += f" Voor {len(report['missing_hours'])} uur zijn er geen meetgegevens; dat verbruik ontbreekt in dit overzicht."
+    if report.get("not_started"):
+        method += " Het evenement is nog niet begonnen: er is nog niets gemeten."
     if report.get("ongoing"):
         method += f" Het evenement loopt nog: gemeten tot {when(end)}. Dit is een tussentijds overzicht."
     method += " Meterstand is de stand van de meter (som van de drie fasen) op dat moment."

@@ -34,7 +34,24 @@ def meter_entities(hass: HomeAssistant, device_id: str) -> dict:
             kind = dc
         else:
             continue
-        out[kind].setdefault(_phase(eid), eid)
+        out[kind].setdefault("_all", []).append(eid)
+    # fase 1 = de sensor zonder achtervoegsel waarvan de _2 en _3 afgeleid zijn (niet een totaalsensor
+    # die toevallig eerst in het register staat); zonder _2/_3 gewoon de eerste
+    for kind, found in out.items():
+        ids = found.pop("_all", [])
+        p2 = next((e for e in ids if e.endswith("_2")), None)
+        p3 = next((e for e in ids if e.endswith("_3")), None)
+        base = (p2 or p3 or "")[:-2]
+        if base and base in ids:
+            found[1] = base
+        elif ids:
+            found[1] = next((e for e in ids if _phase(e) == 1 and "total" not in e), ids[0] if _phase(ids[0]) == 1 else None)
+        if p2:
+            found[2] = p2
+        if p3:
+            found[3] = p3
+        if found.get(1) is None:
+            found.pop(1, None)
     return out
 
 

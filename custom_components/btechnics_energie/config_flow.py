@@ -20,11 +20,17 @@ def _schema(hass, default=None):
         SelectSelectorConfig(options=opts, multiple=True))})
 
 
-def _meters(hass, devices):
-    out, seen = [], set()
+def _meters(hass, devices, existing=None):
+    """existing: de meters van voor de wijziging. Een apparaat dat al gekozen was, houdt zijn id, ook als het
+    intussen hernoemd is: evenementen bewaren die id, anders zou een afrekening naar andere meters kijken."""
+    keep = {m["device_id"]: m["id"] for m in (existing or [])}
+    out, seen = [], set(keep[d] for d in devices if d in keep)
     for d in devices:
         # "Energiemeter Speldenstraat Voorbouw" wordt "Speldenstraat Voorbouw"
         name = re.sub(r"^(energiemeter|energie meter|meter)\s+", "", device_name(hass, d), flags=re.I).strip() or device_name(hass, d)
+        if d in keep:
+            out.append({"id": keep[d], "name": name, "device_id": d})
+            continue
         mid = _slug(name)
         while mid in seen:
             mid += "_2"
@@ -71,7 +77,8 @@ class OptionsFlow(config_entries.OptionsFlow):
                 errors["base"] = err
             else:
                 self.hass.config_entries.async_update_entry(
-                    self.config_entry, data={CONF_METERS: _meters(self.hass, user_input["devices"])})
+                    self.config_entry, data={CONF_METERS: _meters(self.hass, user_input["devices"],
+                                                                  self.config_entry.data.get(CONF_METERS, []))})
                 return self.async_create_entry(data={})
         cur = [m["device_id"] for m in self.config_entry.data.get(CONF_METERS, [])]
         return self.async_show_form(step_id="init", data_schema=_schema(self.hass, cur), errors=errors)

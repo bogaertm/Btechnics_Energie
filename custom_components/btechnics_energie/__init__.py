@@ -133,9 +133,15 @@ class EventPdfView(HomeAssistantView):
         ev = en.events.get(event_id) if en else None
         if ev is None:
             return web.Response(status=404, text="Evenement niet gevonden")
-        report = await en.event_report(ev)
-        data = await hass.async_add_executor_job(
-            build_pdf, report, lambda t: dt_util.as_local(dt_util.utc_from_timestamp(t)), dt_util.now())
+        try:
+            report = await en.event_report(ev)
+            data = await hass.async_add_executor_job(
+                build_pdf, report, lambda t: dt_util.as_local(dt_util.utc_from_timestamp(t)), dt_util.now())
+        except ValueError as err:
+            return web.Response(status=400, text=str(err))
+        except Exception as err:  # noqa: BLE001  duidelijke fout in plaats van een lege 500
+            _LOGGER.exception("PDF maken mislukt voor %s", ev.get("number"))
+            return web.Response(status=500, text=f"PDF maken mislukt: {err}")
         fname = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in f"{ev.get('number', 'evenement')}-{ev.get('name', '')}")[:80]
         return web.Response(body=data, content_type="application/pdf",
                             headers={"Content-Disposition": f'inline; filename="{fname}.pdf"', "Cache-Control": "no-store"})

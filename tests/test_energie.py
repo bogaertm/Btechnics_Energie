@@ -253,3 +253,47 @@ async def test_evenement_met_gat_in_kwartieren(hass, setup):
     draft = {"name": "Gat", "start": f"{d.isoformat()}T09:00", "end": f"{d.isoformat()}T12:00", "meters": ["voorbouw"]}
     rep = (await ws(type=f"{DOMAIN}/event/report", draft=draft))["result"]
     assert rep["resolution"] == "kwartier" and len(rep["estimated_hours"]) == 1 and rep["total"] == pytest.approx(9.0)
+
+
+# ---------------------------------------------------------------- audit 26/09 (v0.3.0)
+
+def test_pdf_met_speciale_tekens():
+    from datetime import datetime
+    from custom_components.btechnics_energie.pdf import build_pdf
+    rep = {"event": {"name": "Party 🎉 Łódź → “ok”", "number": "EV-2026-009", "organizer": "Zoë ✓", "note": "Ça va ≥ 2", "start": "2026-09-26T10:00+02:00", "end": "2026-09-26T11:00+02:00"},
+           "from": 0, "to": 3600, "resolution": "kwartier", "step": 900, "ongoing": False, "not_started": False,
+           "estimated_hours": [], "missing_hours": [3600], "meters": [{"id": "v", "name": "Voorbouw", "kwh": 1.0, "begin": 1.0, "end": 2.0}],
+           "total": 1.0, "price": 0.36, "amount": 0.36, "peak": None, "series": []}
+    data = build_pdf(rep, lambda t: datetime(2026, 9, 26, 12, 0), datetime(2026, 9, 26, 12, 0))
+    assert data[:4] == b"%PDF"
+
+
+async def test_evenement_rand_uur_met_ontbrekend_kwartier(hass, setup):
+    """Een gat aan het begin van het evenement: enkel dat kwartier schatten, niet alles per uur."""
+    ws = setup["ws"]
+    en = hass.data[DOMAIN]
+    d = dt_util.now().date() - timedelta(days=2)
+    s = int(dt_util.start_of_local_day(d).timestamp())
+    en.db.upsert({s + 900 * i: {"voorbouw": 0.75, "achterbouw": 0.125} for i in range(96) if i != 41})   # 10u15 ontbreekt
+    draft = {"name": "Rand", "start": f"{d.isoformat()}T10:15", "end": f"{d.isoformat()}T11:00", "meters": ["voorbouw"]}
+    rep = (await ws(type=f"{DOMAIN}/event/report", draft=draft))["result"]
+    # uur 10u00: 3 kWh; bekend 3 x 0,75; het ontbrekende kwartier = 0,75
+    assert rep["resolution"] == "kwartier" and rep["from"] == s + 41 * 900 and rep["total"] == pytest.approx(2.25)
+
+
+async def test_evenement_onbekende_meter_en_nog_niet_begonnen(hass, setup):
+    ws = setup["ws"]
+    later = (dt_util.now() + timedelta(days=2)).strftime("%Y-%m-%dT%H:00")
+    later2 = (dt_util.now() + timedelta(days=2, hours=3)).strftime("%Y-%m-%dT%H:00")
+    rep = (await ws(type=f"{DOMAIN}/event/report", draft={"name": "Later", "start": later, "end": later2, "meters": ["voorbouw"]}))["result"]
+    assert rep["not_started"] and rep["total"] == 0 and not rep["ongoing"]
+    en = hass.data[DOMAIN]
+    with pytest.raises(ValueError, match="bestaat niet meer"):
+        await en.event_report({"name": "x", "start": later, "end": later2, "meters": ["weg"]})
+
+
+def test_kwartier_na_gat_gemarkeerd():
+    from custom_components.btechnics_energie.calc import gap_quarters
+    rows = {"v": [(0, 1), (300, 1), (600, 1), (1800, 5), (2100, 1), (2400, 1), (2700, 1), (3000, 1), (3300, 1)]}
+    g = gap_quarters(rows, [0, 1800, 2700], 300)
+    assert g == {0: None, 1800: 1, 2700: 0}

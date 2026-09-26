@@ -15,7 +15,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from .calc import Tariffs, billing_peak, month_peaks, quarter_bounds, quarters_from_5min
+from .calc import Tariffs, billing_peak, gap_quarters, month_peaks, quarter_bounds, quarters_from_5min
 from .const import STORE_KEY, STORE_VERSION
 from .events import EventStore
 from .meters import device_name, meter_entities
@@ -37,19 +37,33 @@ class QuarterDB:
             cols = {r[1] for r in c.execute("PRAGMA table_info(quarter)")}
             if "state" not in cols:
                 c.execute("ALTER TABLE quarter ADD COLUMN state REAL")
+            # v0.3: 1 = kwartier direct na een gat in de gegevens (telt niet mee voor pieken)
+            if "gap" not in cols:
+                c.execute("ALTER TABLE quarter ADD COLUMN gap INTEGER")
 
     def _conn(self):
         return sqlite3.connect(self._path, timeout=30)
 
-    def upsert(self, quarters: dict, states: dict | None = None) -> int:
-        states = states or {}
-        rows = [(m, int(ts), float(k), (states.get(ts) or {}).get(m)) for ts, per in quarters.items() for m, k in per.items()]
+    def upsert(self, quarters: dict, states: dict | None = None, gaps: dict | None = None) -> int:
+        states, gaps = states or {}, gaps or {}
+        rows = [(m, int(ts), float(k), (states.get(ts) or {}).get(m), gaps.get(ts))
+                for ts, per in quarters.items() for m, k in per.items()]
         if not rows:
             return 0
         with self._lock, closing(self._conn()) as c, c:
-            c.executemany("INSERT INTO quarter (meter, ts, kwh, state) VALUES (?, ?, ?, ?) "
-                          "ON CONFLICT(meter, ts) DO UPDATE SET kwh = excluded.kwh, state = COALESCE(excluded.state, state)", rows)
+            c.executemany("INSERT INTO quarter (meter, ts, kwh, state, gap) VALUES (?, ?, ?, ?, ?) "
+                          "ON CONFLICT(meter, ts) DO UPDATE SET kwh = excluded.kwh, state = COALESCE(excluded.state, state), "
+                          "gap = COALESCE(excluded.gap, gap)", rows)
         return len(rows)
+
+    def gaps(self, start: int, end: int) -> set:
+        """Kwartieren direct na een gat in de gegevens (start <= ts < end)."""
+        with closing(self._conn()) as c:
+            return {r[0] for r in c.execute("SELECT DISTINCT ts FROM quarter WHERE ts >= ? AND ts < ? AND gap = 1", (start, end))}
+
+    def last(self):
+        with closing(self._conn()) as c:
+            return c.execute("SELECT MAX(ts) FROM quarter").fetchone()[0]
 
     def states(self, start: int, end: int) -> dict:
         """{ts: {meter: meterstand}} op het einde van elk kwartier (start <= ts < end)."""
@@ -147,10 +161,12 @@ class Energy:
         end = dt_util.utcnow()
         start = end - timedelta(hours=hours)
         meters, _, states = await self._energy(start, end, "5minute", with_state=True)
-        q, qs = quarters_from_5min({m: list(v.items()) for m, v in meters.items()}, None, states)
+        rows = {m: list(v.items()) for m, v in meters.items()}
+        q, qs = quarters_from_5min(rows, None, states)
         # enkel kwartieren waarvoor alle meters gegevens hebben
         q = {ts: per for ts, per in q.items() if len(per) == len(self.meters)}
-        return await self.hass.async_add_executor_job(self.db.upsert, q, qs)
+        gaps = gap_quarters(rows, q, int(start.timestamp()) + 300)
+        return await self.hass.async_add_executor_job(self.db.upsert, q, qs, gaps)
 
     # ---------- hulp ----------
     @staticmethod
@@ -183,9 +199,10 @@ class Energy:
         meters, _ = await self._energy(s, e, "day")
         meters = {m: v for m, v in meters.items() if m in sel}
         quarters = await self.hass.async_add_executor_job(self.db.between, int(s.timestamp()), int(e.timestamp()))
+        gaps = await self.hass.async_add_executor_job(self.db.gaps, int(s.timestamp()), int(e.timestamp()))
         peaks = {}
         for ts, per in quarters.items():
-            if not all(m in per for m in sel):
+            if ts in gaps or not all(m in per for m in sel):
                 continue
             d = self._local_day(ts)
             kw = sum(per[m] for m in sel) * 4
@@ -214,6 +231,7 @@ class Energy:
             for ts, k in per.items():
                 hours.setdefault(ts, {})[mid] = round(k, 4)
         quarters = await self.hass.async_add_executor_job(self.db.between, int(s.timestamp()), int(e.timestamp()))
+        gaps = await self.hass.async_add_executor_job(self.db.gaps, int(s.timestamp()), int(e.timestamp()))
         price = self.tariffs.price(d)
         # fasen: vermogen, stroom, spanning; 5 minuten als het nog kan (Home Assistant bewaart die 10 dagen)
         recent = dt_util.utcnow() - s < timedelta(days=9)
@@ -236,7 +254,7 @@ class Energy:
             phases[m["id"]] = pm
         return {"date": d.isoformat(), "start": int(s.timestamp()), "end": int(e.timestamp()), "price": price,
                 "hours": [{"ts": ts, "meters": per} for ts, per in sorted(hours.items())],
-                "quarters": [{"ts": ts, "meters": per} for ts, per in sorted(quarters.items())],
+                "quarters": [{"ts": ts, "meters": per, **({"gap": True} if ts in gaps else {})} for ts, per in sorted(quarters.items())],
                 "phase_period": period, "phases": phases, "meters": self._meta()}
 
     # ---------- pieken per maand ----------
@@ -245,10 +263,11 @@ class Energy:
         now = dt_util.now()
         start = int((now - timedelta(days=400)).timestamp())
         quarters = await self.hass.async_add_executor_job(self.db.between, start, int(now.timestamp()) + 900)
+        gaps = await self.hass.async_add_executor_job(self.db.gaps, start, int(now.timestamp()) + 900)
         rows = []
         top = []
         for ts, per in quarters.items():
-            if not all(m in per for m in sel):
+            if ts in gaps or not all(m in per for m in sel):
                 continue
             local = dt_util.as_local(dt_util.utc_from_timestamp(ts))
             total = sum(per[m] for m in sel)
@@ -269,48 +288,72 @@ class Energy:
         """Verbruik van een evenement per kwartier (begin en einde afgerond op het kwartier), met de
         meterstanden bij begin en einde.
 
-        - Loopt het evenement nog, dan wordt gemeten tot het laatste volledige kwartier (ongoing).
-        - Ontbreken er kwartieren binnen volle uren (bv. Home Assistant stond even uit), dan komt het
-          verbruik van dat uur uit de uurstatistieken en wordt het gelijk over de 4 kwartieren verdeeld.
-        - Zijn er geen kwartieren (voor de integratie bestond), dan per uur; begin en einde op het uur.
+        - Nog niet begonnen: niets gemeten (not_started). Loopt het nog: gemeten tot het laatste kwartier
+          dat al overgenomen is (de kwartieren komen elke 5 minuten binnen), met ongoing.
+        - Ontbreekt een kwartier (Home Assistant stond even uit), dan wordt het geschat uit de uurstatistiek:
+          het verbruik van dat uur min de gekende kwartieren van dat uur, verdeeld over de ontbrekende
+          kwartieren. Ook aan de randen van het evenement. Zo'n uur staat in estimated_hours.
+        - Zonder kwartieren (voor de integratie bestond) per uur, begin en einde op het uur; uren zonder
+          gegevens staan in missing_hours.
         Meterstanden: uit de kwartieren, anders uit de uurstatistieken (stand op het einde van het uur)."""
-        sel = self._sel(ev.get("meters"))
+        ids = [m["id"] for m in self.meters]
+        unknown = [m for m in (ev.get("meters") or []) if m not in ids]
+        sel = [m for m in (ev.get("meters") or []) if m in ids]
+        if unknown or not sel:
+            raise ValueError("meter van dit evenement bestaat niet meer (" + ", ".join(unknown or ["geen meter"])
+                             + "): open het evenement en kies de meters opnieuw")
         start = int(dt_util.parse_datetime(ev["start"]).timestamp())
         end = int(dt_util.parse_datetime(ev["end"]).timestamp())
         now = int(dt_util.utcnow().timestamp())
         qs, qe = quarter_bounds(start, end)
+        not_started = start > now
         ongoing = False
-        last_full_q = now - now % 900
-        if qe > last_full_q:
-            ongoing = True
-            qe = max(qs, last_full_q)
-        quarters = await self.hass.async_add_executor_job(self.db.between, qs, qe)
-        qstates = await self.hass.async_add_executor_job(self.db.states, qs - 900, qe)
-        missing = [ts for ts in range(qs, qe, 900) if not (ts in quarters and all(m in quarters[ts] for m in sel))]
-        missing_hours = sorted({ts - ts % 3600 for ts in missing})
-        hybrid_ok = bool(quarters) and all(h >= qs and h + 3600 <= qe for h in missing_hours)
-
-        # uurstatistieken (verbruik en stand) rond de periode: nodig voor ontbrekende uren en meterstanden
+        if not not_started:
+            last = await self.hass.async_add_executor_job(self.db.last)
+            # tot het laatste overgenomen kwartier (hoogstens 30 min terug; anders tot het laatste volle kwartier)
+            limit = now - now % 900
+            if last is not None and limit - (last + 900) <= 1800:
+                limit = min(limit, last + 900)
+            if qe > limit:
+                ongoing = True
+                qe = max(qs, limit)
+        else:
+            qe = qs
         hs = qs - qs % 3600
         he = qe + (-qe) % 3600
-        hmeters, _, hstates = await self._energy(dt_util.utc_from_timestamp(hs - 3600), dt_util.utc_from_timestamp(he), "hour",
-                                                 with_state=True)
+        quarters = await self.hass.async_add_executor_job(self.db.between, hs, he)
+        gaps = await self.hass.async_add_executor_job(self.db.gaps, qs, qe)
+        qstates = await self.hass.async_add_executor_job(self.db.states, qs - 900, qe)
+        have_q = any(all(m in quarters.get(ts, {}) for m in sel) for ts in range(qs, qe, 900))
+
+        # uurstatistieken (verbruik en stand) rond de periode: nodig voor ontbrekende kwartieren en meterstanden
+        hmeters, _, hstates = await self._energy(dt_util.utc_from_timestamp(hs - 3600), dt_util.utc_from_timestamp(max(he, hs + 3600)),
+                                                 "hour", with_state=True)
 
         per_meter = {m: 0.0 for m in sel}
-        series, estimated = [], []
-        if not missing or hybrid_ok:
+        series, estimated, missing_hours = [], set(), set()
+        if have_q or qe == qs:
             resolution, step = "kwartier", 900
             for ts in range(qs, qe, 900):
                 h = ts - ts % 3600
-                if h in missing_hours:
-                    per = {m: (hmeters.get(m, {}).get(h) or 0.0) / 4 for m in sel}
-                    if ts == h:
-                        estimated.append(h)
-                else:
-                    per = {m: quarters[ts][m] for m in sel}
-                for m, v in per.items():
+                per, est = {}, False
+                for m in sel:
+                    v = quarters.get(ts, {}).get(m)
+                    if v is None:
+                        hv = hmeters.get(m, {}).get(h)
+                        if hv is None:
+                            missing_hours.add(h)
+                            v = 0.0
+                        else:
+                            known = [quarters.get(t, {}).get(m) for t in range(h, h + 3600, 900)]
+                            n_missing = sum(1 for x in known if x is None)
+                            v = max(0.0, (hv - sum(x for x in known if x is not None)) / max(1, n_missing))
+                            estimated.add(h)
+                        est = True
+                    per[m] = v
                     per_meter[m] += v
-                series.append({"ts": ts, "meters": per, **({"estimated": True} if h in missing_hours else {})})
+                series.append({"ts": ts, "meters": per, **({"estimated": True} if est else {}),
+                               **({"gap": True} if ts in gaps else {})})
             f, t = qs, qe
         else:
             resolution, step = "uur", 3600
@@ -320,6 +363,8 @@ class Energy:
                 t = max(f, now - now % 3600)
             for ts in range(f, t, 3600):
                 per = {m: hmeters.get(m, {}).get(ts) for m in sel}
+                if any(v is None for v in per.values()):
+                    missing_hours.add(ts)
                 per = {m: v for m, v in per.items() if v is not None}
                 for m, v in per.items():
                     per_meter[m] += v
@@ -340,7 +385,7 @@ class Energy:
         peak = None
         if resolution == "kwartier":
             for x in series:
-                if x.get("estimated"):
+                if x.get("estimated") or x.get("gap"):
                     continue
                 kw = sum(x["meters"].values()) * 4
                 if peak is None or kw > peak["kw"]:
@@ -348,9 +393,9 @@ class Energy:
         names = {m["id"]: m["name"] for m in self.meters}
         return {
             "event": ev, "from": f, "to": t, "resolution": resolution, "step": step, "ongoing": ongoing,
-            "estimated_hours": estimated,
+            "not_started": not_started, "estimated_hours": sorted(estimated), "missing_hours": sorted(missing_hours),
             "meters": [{"id": m, "name": names.get(m, m), "kwh": round(per_meter[m], 3),
-                        "begin": reading(m, f), "end": reading(m, t)} for m in sel],
+                        "begin": None if not_started else reading(m, f), "end": None if not_started else reading(m, t)} for m in sel],
             "total": round(total, 3), "price": price, "amount": round(total * price, 2) if price is not None else None,
             "peak": peak, "series": series,
         }
