@@ -109,13 +109,13 @@ const CSS = `
   .kpi .l { font-size: 0.8rem; color: var(--secondary-text-color); }
   .kpi.click { cursor: pointer; }
   .kpi.click:hover { outline: 1px solid var(--primary-color); }
-  .live { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .live { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 21.5rem), 1fr)); gap: 12px; margin-bottom: 16px; }
   .meter { border: 1px solid var(--divider-color); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; min-width: 0; }
   .meter .head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
-  .ph.tot { grid-template-columns: 14px minmax(0, 1fr) 76px 52px; }
+  .ph.tot { grid-template-columns: 14px minmax(0, 1fr) 4.8rem 4.4rem; }
   .meter .name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
   .meter .p { white-space: nowrap; line-height: 1.2; font-size: 1.6rem; font-weight: 500; font-variant-numeric: tabular-nums; }
-  .ph { display: grid; grid-template-columns: 26px minmax(30px, 1fr) 68px 56px 52px; column-gap: 10px; align-items: center;
+  .ph { display: grid; grid-template-columns: 1.6rem minmax(24px, 1fr) 4.8rem 4.2rem 4.4rem; column-gap: 10px; align-items: center;
     font-size: 0.9rem; font-variant-numeric: tabular-nums; padding: 5px 0; border-top: 1px solid var(--divider-color); }
   .ph.hd { border-top: none; font-size: 0.75rem; color: var(--secondary-text-color); padding: 0 0 3px; }
   .ph .r { text-align: right; white-space: nowrap; }
@@ -148,6 +148,8 @@ const CSS = `
   @media (max-width: 640px) {
     .help td:first-child { white-space: normal; }
     .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .ph { grid-template-columns: 1.4rem minmax(16px, 1fr) 4.4rem 3.8rem 3.9rem; column-gap: 6px; font-size: 0.85rem; }
+    .meter { padding: 12px 10px; }
     .kpi .v { font-size: 1.1rem; }
   }
 `;
@@ -1100,7 +1102,7 @@ class BtechnicsEnergieCard extends HTMLElement {
 }
 
 // Home Assistant laadt deze module soms voor de kaartregistratie klaar is: veilig definieren.
-const CARD_VERSION = "0.3.1";
+const CARD_VERSION = "0.3.2";
 // Een oude kopie van de pagina (service worker) kan eerst een oudere versie van dit script laden
 // (vastgesteld 26/09/2026: v0.2.2 uit de cache voor v0.3.0). Een custom element kan niet opnieuw gedefinieerd
 // worden: de al geregistreerde klasse laten steunen op deze code en bestaande kaarten opnieuw opbouwen.
