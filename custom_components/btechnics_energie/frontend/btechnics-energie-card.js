@@ -143,7 +143,16 @@ const CSS = `
   .panel { border: 1px solid var(--divider-color); border-radius: 8px; padding: 12px; margin: 12px 0; }
   .msg.ok { color: var(--success-color, #0b8043); }
   .daytitle { font-size: 1.1rem; font-weight: 500; margin: 0 8px; }
+  .help { max-width: 920px; line-height: 1.5; }
+  .help p { margin: 6px 0 10px; }
+  .help ol { margin: 6px 0 10px; padding-left: 22px; }
+  .help li { margin: 2px 0; }
+  .help section { scroll-margin-top: 12px; }
+  .help h3 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 12px; margin-top: 24px; }
+  .help .open { font-size: 0.85rem; font-weight: 400; }
+  .help td:first-child { white-space: nowrap; font-weight: 500; }
   @media (max-width: 640px) {
+    .help td:first-child { white-space: normal; }
     .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .kpi .v { font-size: 1.1rem; }
   }
@@ -260,7 +269,112 @@ const csvNum = (v, d = 3) => (v == null ? "" : String(Math.round(v * 10 ** d) / 
 
 /* ------------------------------------------------------------------ kaart */
 
-const TABS = [["overzicht", "Overzicht"], ["dag", "Dag"], ["periode", "Periode"], ["pieken", "Pieken"], ["evenementen", "Evenementen"], ["tarieven", "Tarieven"]];
+const TABS = [["overzicht", "Overzicht"], ["dag", "Dag"], ["periode", "Periode"], ["pieken", "Pieken"], ["evenementen", "Evenementen"], ["tarieven", "Tarieven"], ["handleiding", "Handleiding"]];
+
+/* ------------------------------------------------------------------ handleiding */
+// [sleutel, titel, tab om naartoe te gaan of null, HTML]
+const tbl = (head, rows) => `<div class="scroll"><table><thead><tr>${head.map((h) => `<th>${h}</th>`).join("")}</tr></thead><tbody>
+  ${rows.map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+const HELP = [
+  ["start", "Waar en voor wie", null, `
+    <p>Dit tabblad toont het elektriciteitsverbruik van het gebouw in de Speldenstraat. Het gebouw heeft een aansluiting met twee meters:
+    Speldenstraat Voorbouw en Speldenstraat Achterbouw. Het totaal is altijd de som van beide.</p>
+    ${tbl(["Tab", "Waarvoor", "Wie"], [
+      ["Overzicht", "Live vermogen en verbruik van vandaag tot dit jaar", "iedereen"],
+      ["Dag", "Een dag in detail, per uur, kwartier en fase", "iedereen"],
+      ["Periode", "Verbruik en kost per dag, week of maand", "iedereen"],
+      ["Pieken", "Kwartierpiek per maand voor het capaciteitstarief", "iedereen"],
+      ["Evenementen", "Verbruik van een sessie, optreden of expo, met PDF", "enkel beheerders"],
+      ["Tarieven", "Prijs per kWh met historiek", "enkel beheerders"]])}
+    <p><b>Meterkeuze.</b> Boven de tabbladen kies je Alle meters, Speldenstraat Voorbouw of Speldenstraat Achterbouw. De keuze geldt voor
+    Overzicht, Dag, Periode en Pieken. Zo zie je elk deel apart, bijvoorbeeld om het door te rekenen. De gekozen meter staat ook in de naam van elk CSV-bestand.</p>
+    <p><b>Tip.</b> Op bijna elke dag, piek of balk in een grafiek kun je klikken. Je komt dan meteen in de tab Dag voor die dag.</p>`],
+  ["overzicht", "Overzicht", "overzicht", `
+    <p>Overzicht toont wat er nu verbruikt wordt en hoeveel dat vandaag, deze week, deze maand en dit jaar kost.</p>
+    <p><b>Live kaarten.</b> Per meter een kaart met bovenaan het totale vermogen in kW en per fase (L1, L2, L3) een rij:</p>
+    ${tbl(["Kolom", "Betekenis"], [
+      ["Stroom (balk)", "Hoe zwaar de fase belast is; vol bij 16 A, of bij de hoogste fase als die meer trekt"],
+      ["Vermogen", "Wat die fase nu vraagt, in kW"],
+      ["Stroom", "Stroom op die fase, in A"],
+      ["Spanning", "Spanning op die fase, in V"]])}
+    <p>Is een fase veel hoger dan de andere, dan is de belasting ongelijk verdeeld. De kaart Totaal nu telt beide meters op en toont het aandeel van elke meter.</p>
+    <p><b>Tegels.</b> Vandaag, Gisteren, Deze week, Vorige week, Deze maand, Vorige maand en Dit jaar, telkens met kWh en kost. Klik op Vandaag of Gisteren
+    voor die dag in detail. De tegel Kwartierpiek deze maand toont ook de facturatiepiek en opent Pieken.</p>
+    <p><b>Laatste 30 dagen.</b> Verbruik per dag, Voorbouw en Achterbouw elk in een eigen kleur. Ga met de muis over een balk voor kWh, kost en verdeling; klik om die dag te openen.</p>`],
+  ["dag", "Dag", "dag", `
+    <p>Dag toont een dag in detail: hoeveel, wanneer en op welke fase er verbruikt werd, met de kost tegen het tarief van die dag.</p>
+    ${tbl(["Onderdeel", "Uitleg"], [
+      ["Dag kiezen", "Pijltjes voor vorige of volgende dag, een datum in de kalender, of Vandaag en Gisteren"],
+      ["Tegels", "Verbruik, kost, verbruik per meter, kwartierpiek met tijdstip en gemiddeld vermogen"],
+      ["Grafiek", "Per uur in kWh of per kwartier als gemiddeld vermogen in kW; per kwartier kan vanaf 16 sep 2026"],
+      ["Per fase", "Kies een meter en Vermogen, Stroom of Spanning; de tabel geeft per fase verbruik, hoogste vermogen, hoogste stroom en laagste en hoogste spanning"],
+      ["Per uur", "Verbruik per meter, totaal en kost per uur, met het dagtotaal"],
+      ["CSV", "CSV per uur (kWh, tarief, kost) of CSV per kwartier (kWh en vermogen), te openen in Excel"]])}
+    <p>De fasegrafiek toont voor de laatste 10 dagen gemiddelden per 5 minuten en voor oudere dagen per uur, omdat Home Assistant de 5-minuutwaarden maar 10 dagen bewaart.</p>`],
+  ["periode", "Periode", "periode", `
+    <p>Periode zet verbruik en kost over een langere tijd op een rij. Dit is de tab om een meter door te rekenen over een maand of een jaar.</p>
+    ${tbl(["Onderdeel", "Uitleg"], [
+      ["Periode", "Deze maand, Vorige maand, Laatste 30 dagen, Dit jaar, Vorig jaar of Eigen periode (Van en Tot)"],
+      ["Groeperen", "Per dag, per week of per maand"],
+      ["Dag opzoeken", "Kies een datum en je gaat meteen naar die dag, met verbruik en prijs per uur"],
+      ["Tegels", "Verbruik, kost, gemiddeld per dag, hoogste dag en hoogste kwartierpiek"],
+      ["Tabel", "Per regel het verbruik per meter, totaal, tarief, kost en kwartierpiek; \"meerdere\" bij tarief betekent dat het tarief binnen die week of maand veranderde"],
+      ["CSV", "De tabel zoals op het scherm, met periode en meter in de bestandsnaam"]])}
+    <p>Gegevens zijn er vanaf 15 sep 2026, de dag dat de meters in Home Assistant kwamen.</p>`],
+  ["pieken", "Pieken", "pieken", `
+    <p>Pieken toont de kwartierpieken waarop Fluvius het capaciteitstarief rekent. De maandpiek is het hoogste gemiddelde vermogen over een kwartier in die maand.
+    Fluvius rekent minstens 2,5 kW per maand en neemt het gemiddelde van de maandpieken van de voorbije 12 maanden.</p>
+    ${tbl(["Onderdeel", "Wat je ziet"], [
+      ["Piek deze maand", "Hoogste kwartier van deze maand, met dag en uur"],
+      ["Facturatiepiek (indicatie)", "Gemiddelde van de maandpieken van de laatste 12 maanden, elke maand minstens 2,5 kW"],
+      ["Maandpiek", "Grafiek en tabel per maand, met wanneer de piek viel en wat meetelt"],
+      ["Hoogste kwartieren deze maand", "De zwaarste kwartieren, met het vermogen per meter"]])}
+    <p>Met Alle meters zie je de piek van de aansluiting; die telt voor Fluvius. Met een enkele meter zie je welk deel de piek veroorzaakt.
+    De waarden zijn een benadering: de meters melden hun stand via de cloud om de 1 tot 6 minuten. De offici&euml;le piek staat in Mijn Fluvius.</p>`],
+  ["evenementen", "Evenementen", "evenementen", `
+    <p>Evenementen berekent het volledige verbruik van een sessie, optreden of expo over een gekozen periode en maakt er een afrekening in PDF van. Enkel voor beheerders.</p>
+    <p><b>Een evenement aanmaken</b></p>
+    <ol>
+      <li>Klik op Nieuw evenement.</li>
+      <li>Vul de naam in (verplicht), en eventueel organisator en contact.</li>
+      <li>Kies Begin en Einde, met datum en uur.</li>
+      <li>Vink de meters aan, meestal enkel Speldenstraat Voorbouw.</li>
+      <li>Vul een eigen prijs per kWh in, of laat leeg voor het tarief van de begindag.</li>
+      <li>Zet eventueel een opmerking; die komt op de PDF.</li>
+      <li>Controleer de berekening onder het formulier; die past zich aan terwijl je typt.</li>
+      <li>Klik op Opslaan en daarna op PDF.</li>
+    </ol>
+    ${tbl(["Onderdeel", "Uitleg"], [
+      ["Verbruik", "Som van alle kwartieren tussen begin en einde, afgerond op het volle kwartier"],
+      ["Prijs per kWh", "Eigen prijs, of het tarief van die dag"],
+      ["Bedrag", "Verbruik maal prijs, zoals op de PDF"],
+      ["Meterstanden", "Stand van elke meter bij begin en einde (som van de drie fasen); het verschil is het verbruik"],
+      ["Kwartierpiek en verloop", "Zwaarste kwartier en grafiek per kwartier en per meter"]])}
+    <p><b>Loopt het evenement nog?</b> Dan wordt gemeten tot het laatste volle kwartier, met de melding \"loopt nog\". Maak de PDF opnieuw na afloop voor de eindcijfers.</p>
+    <p><b>Ontbreken er kwartieren</b>, bijvoorbeeld omdat Home Assistant even uit stond? Dan wordt het uurverbruik gelijk over de vier kwartieren verdeeld en staat erbij hoeveel uur geschat is.
+    Periodes van voor 16 sep 2026 worden per uur gerekend.</p>
+    <p><b>De PDF</b> staat op naam van TrefpuntFestival vzw, Walter De Buckplein 5, 9000 Gent, met referentie, gegevens van het evenement, meterstanden, verbruik,
+    prijs, te betalen bedrag, opmerking en twee vakken voor handtekening. Lege velden worden weggelaten.</p>
+    <p><b>Aanpassen of verwijderen.</b> Klik in de lijst op de naam, pas aan en klik op Opslaan. Verwijderen vraagt een tweede klik op Zeker verwijderen?.</p>`],
+  ["tarieven", "Tarieven", "tarieven", `
+    <p>Tarieven bewaart de prijs per kWh met historiek, zodat elke dag altijd tegen het tarief van toen gerekend wordt. Een tarief geldt vanaf 00u00 op die datum tot het volgende.</p>
+    <p><b>Nieuw tarief</b> (enkel beheerders)</p>
+    <ol>
+      <li>Kies de datum vanaf wanneer het geldt.</li>
+      <li>Vul de all-in prijs per kWh in zoals op de factuur: energie, nettarieven en heffingen per kWh, inclusief btw.</li>
+      <li>Klik op Opslaan.</li>
+    </ol>
+    <p>Een verkeerd tarief verwijder je met Verwijderen; het laatste tarief kan niet weg. Het capaciteitstarief (per kW maandpiek) zit niet in deze prijs, zie Pieken.</p>`],
+  ["meting", "Hoe er gemeten wordt", null, `
+    ${tbl(["Onderdeel", "Werking"], [
+      ["Meters", "Twee Shelly-energiemeters met drie fasen; het verbruik van een meter is de som van de fasen"],
+      ["Uur, dag en maand", "Langetermijnstatistieken van Home Assistant, vanaf 15 sep 2026"],
+      ["Kwartieren", "Elke 5 minuten overgenomen in een eigen databank, met de meterstand per kwartier, vanaf 16 sep 2026"],
+      ["Fasen", "5-minuutwaarden voor de laatste 10 dagen, daarna uurwaarden"],
+      ["Kost", "Verbruik maal het tarief van die dag"]])}
+    <p>Het verbruik in kWh klopt. Een kwartierpiek kan iets afwijken van wat de digitale meter van Fluvius meet; voor de factuur geldt altijd Mijn Fluvius.</p>
+    <p class="muted">Bron capaciteitstarief: Fluvius, \"Hoe wordt het capaciteitstarief aangerekend?\" en \"Het capaciteitstarief op mijn factuur\" (fluvius.be).</p>`],
+];
 const PRESETS = [["month", "Deze maand"], ["prevmonth", "Vorige maand"], ["30", "Laatste 30 dagen"], ["year", "Dit jaar"],
   ["prevyear", "Vorig jaar"], ["custom", "Eigen periode"]];
 
@@ -340,7 +454,8 @@ class BtechnicsEnergieCard extends HTMLElement {
     const body = this.shadowRoot.getElementById("body");
     const fail = (e) => { if (seq === this._seq) body.innerHTML = `<div class="error">Kon de gegevens niet laden: ${esc(errText(e))}</div>`; };
     const run = { overzicht: () => this._overview(seq), dag: () => this._dayView(seq), periode: () => this._periodView(seq),
-      pieken: () => this._peaksView(seq), tarieven: () => this._tariffView(seq), evenementen: () => this._eventsView(seq) }[this._tab];
+      pieken: () => this._peaksView(seq), tarieven: () => this._tariffView(seq), evenementen: () => this._eventsView(seq),
+      handleiding: () => this._helpView() }[this._tab];
     return run().catch(fail);
   }
   _goDay(d) {
@@ -908,6 +1023,20 @@ class BtechnicsEnergieCard extends HTMLElement {
       tip: (i) => { const x = r.series[i]; const sum = Object.values(x.meters).reduce((a, b) => a + b, 0);
         return `<b>${f.dateTime(x.ts)} tot ${f.time(x.ts + r.step)}</b><br>${kwh(sum, 3)}${quarter ? `, gemiddeld ${kw(sum * 4)}` : ""}${x.estimated ? " (uit uurwaarde)" : ""}<br>${this._meterSplit(meters, x.meters, (v) => kwh(v, 3))}`; },
     });
+  }
+
+  /* ---------------- handleiding ---------------- */
+  async _helpView() {
+    const body = this.shadowRoot.getElementById("body");
+    body.innerHTML = `<div class="help">
+      <div class="bar">${HELP.map(([k, t]) => `<button class="btn" data-go="${k}">${esc(t)}</button>`).join("")}</div>
+      ${HELP.map(([k, t, tab, html]) => `<section id="h_${k}"><h3>${esc(t)}${tab ? ` <button class="link open" data-tab="${tab}">Open ${esc(t)} &rsaquo;</button>` : ""}</h3>${html}</section>`).join("")}
+    </div>`;
+    body.querySelectorAll("[data-go]").forEach((b) => b.addEventListener("click", () => {
+      const s = body.querySelector(`#h_${b.dataset.go}`);
+      if (s) s.scrollIntoView({ behavior: "smooth", block: "start" });
+    }));
+    body.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => { this._tab = b.dataset.tab; this._renderTabs(); this._show(); }));
   }
 
   /* ---------------- tarieven ---------------- */
