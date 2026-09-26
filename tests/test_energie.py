@@ -75,6 +75,9 @@ async def test_dagen_met_kost(hass, setup):
     assert r["success"], r
     days = r["result"]["days"]
     assert [d["date"] for d in days] == [d0, (dt_util.now().date() - timedelta(days=2)).isoformat(), d2]
+    # een enkele dag geeft precies die dag (de recorder geeft ook de rij van de volgende dag terug)
+    r1 = await ws(type=f"{DOMAIN}/days", start=d0, end=d0)
+    assert [d["date"] for d in r1["result"]["days"]] == [d0]
     # eerste dag: 24 uur, maar het eerste uur heeft geen "change" (geen vorige som)
     full = days[1]
     assert full["meters"] == {"voorbouw": 72.0, "achterbouw": 12.0} and full["total"] == 84.0
@@ -114,7 +117,7 @@ async def test_dag_in_detail_en_pieken(hass, setup):
     r = await ws(type=f"{DOMAIN}/day", date=d.isoformat())
     assert r["success"], r
     day = r["result"]
-    assert len(day["hours"]) == 24 and day["hours"][5]["meters"] == {"voorbouw": 3.0, "achterbouw": 0.5}
+    assert len(day["hours"]) == 24 and all(day["start"] <= h["ts"] < day["end"] for h in day["hours"]) and day["hours"][5]["meters"] == {"voorbouw": 3.0, "achterbouw": 0.5}
     assert len(day["quarters"]) == 96 and day["price"] == 0.36
     assert set(day["phases"]["voorbouw"]) == {"1", "2", "3"} and day["phases"]["voorbouw"]["1"]["kwh"] == 24.0
     r = await ws(type=f"{DOMAIN}/days", start=d.isoformat(), end=d.isoformat())

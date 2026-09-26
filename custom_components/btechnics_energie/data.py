@@ -100,7 +100,10 @@ class Energy:
         per_meter = self._energy_ids()
         ids = [e for v in per_meter.values() for e in v]
         rows = await self._stats(ids, start, end, period, {"change"}, {"energy": "kWh"})
-        by_ent = {e: {int(r["start"]): r.get("change") for r in rows.get(e, []) if r.get("change") is not None} for e in ids}
+        # de recorder geeft ook de rij die precies op het einde begint: die hoort niet bij de periode
+        s_ts, e_ts = start.timestamp(), end.timestamp()
+        by_ent = {e: {int(r["start"]): r.get("change") for r in rows.get(e, [])
+                      if r.get("change") is not None and s_ts <= r["start"] < e_ts} for e in ids}
         meters = {}
         for mid, ents in per_meter.items():
             acc = {}
@@ -187,7 +190,8 @@ class Energy:
                 for k in ("power", "current", "voltage"):
                     eid = m["ents"][k].get(p)
                     rows = pstats.get(eid, []) if eid else []
-                    ph[k] = [[int(r["start"]), r.get("mean"), r.get("max"), r.get("min")] for r in rows]
+                    ph[k] = [[int(r["start"]), r.get("mean"), r.get("max"), r.get("min")] for r in rows
+                             if s.timestamp() <= r["start"] < e.timestamp()]
                 ee = m["ents"]["energy"].get(p)
                 ph["kwh"] = round(sum(by_ent.get(ee, {}).values()), 3) if ee else None
                 pm[str(p)] = ph
