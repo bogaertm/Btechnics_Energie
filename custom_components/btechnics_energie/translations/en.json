@@ -1,0 +1,28 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Energiemeters kiezen",
+        "description": "Kies de meters die samen de aansluiting vormen. Het totaal is de som van alle gekozen meters.",
+        "data": {"devices": "Energiemeters"}
+      }
+    },
+    "error": {
+      "no_meters": "Kies minstens een meter.",
+      "no_energy": "Een gekozen apparaat heeft geen energiesensor."
+    },
+    "abort": {"single_instance_allowed": "Btechnics Energie is al ingesteld. Pas de meters aan via Configureren."}
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Energiemeters aanpassen",
+        "data": {"devices": "Energiemeters"}
+      }
+    },
+    "error": {
+      "no_meters": "Kies minstens een meter.",
+      "no_energy": "Een gekozen apparaat heeft geen energiesensor."
+    }
+  }
+}

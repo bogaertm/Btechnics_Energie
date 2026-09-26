@@ -1,0 +1,23 @@
+{
+  "domain": "btechnics_energie",
+  "name": "Btechnics Energie",
+  "dependencies": [
+    "recorder",
+    "http",
+    "websocket_api"
+  ],
+  "after_dependencies": [
+    "frontend",
+    "lovelace"
+  ],
+  "version": "0.1.0",
+  "documentation": "https://github.com/bogaertm/Btechnics_Energie",
+  "issue_tracker": "https://github.com/bogaertm/Btechnics_Energie/issues",
+  "codeowners": [
+    "@bogaertm"
+  ],
+  "config_flow": true,
+  "single_config_entry": true,
+  "iot_class": "calculated",
+  "requirements": []
+}
