@@ -154,7 +154,7 @@ function barChart(root, { labels, series, unit = "kWh", tip, onClick, height = 2
   const y = (v) => top + plotH - (v / nice) * plotH;
   const band = plotW / Math.max(n, 1), bw = Math.max(1, Math.min(28, band * 0.7));
   const grid = [0, nice / 2, nice].map((v) => `<line class="grid" x1="${left}" x2="${W - right}" y1="${y(v)}" y2="${y(v)}"></line>
-    <text x="${left - 6}" y="${y(v) + 4}" text-anchor="end">${(nice < 10 ? N1 : N0).format(v)}</text>`).join("");
+    <text x="${left - 6}" y="${y(v) + 4}" text-anchor="end">${(Number.isInteger(v) ? N0 : N1).format(v)}</text>`).join("");
   const skip = Math.max(every || 1, Math.ceil(n / Math.max(1, Math.floor(plotW / 44))));
   let bars = "", xl = "", hits = "";
   labels.forEach((lab, i) => {

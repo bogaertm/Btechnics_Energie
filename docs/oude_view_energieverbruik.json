@@ -1,0 +1,68 @@
+{
+ "type": "sections",
+ "max_columns": 4,
+ "title": "Energieverbruik",
+ "path": "energieverbruik",
+ "sections": [
+  {
+   "type": "grid",
+   "cards": [
+    {
+     "type": "markdown",
+     "title": "Speldenstraat Voorbouw - verbruik en kost",
+     "content": "(tabel vandaag, week, maand, jaar met input_number.energietarief_per_kwh en sensor.voorbouw_verbruik_dag/week/maand/jaar)"
+    },
+    {
+     "type": "statistics-graph",
+     "title": "Speldenstraat Voorbouw - dagelijks verbruik",
+     "entities": [
+      "sensor.verbruik_speldenstraat_voorbouw"
+     ],
+     "stat_types": [
+      "change"
+     ],
+     "period": "day",
+     "days_to_show": 30,
+     "chart_type": "bar"
+    },
+    {
+     "type": "tile",
+     "entity": "input_number.energietarief_per_kwh",
+     "features": [
+      {
+       "type": "numeric-input"
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "type": "grid",
+   "cards": [
+    {
+     "type": "heading",
+     "heading": "Speldenstraat Achterbouw",
+     "heading_style": "title"
+    },
+    {
+     "type": "markdown",
+     "title": "Speldenstraat Achterbouw - verbruik en kost",
+     "content": "(zelfde tabel met sensor.achterbouw_verbruik_*)"
+    },
+    {
+     "type": "statistics-graph",
+     "title": "Speldenstraat Achterbouw - dagelijks verbruik",
+     "entities": [
+      "sensor.verbruik_speldenstraat_achterbouw"
+     ],
+     "stat_types": [
+      "change"
+     ],
+     "period": "day",
+     "days_to_show": 30,
+     "chart_type": "bar"
+    }
+   ]
+  }
+ ]
+}
