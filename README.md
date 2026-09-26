@@ -9,6 +9,8 @@ Home Assistant integratie en dashboardkaart voor het elektriciteitsverbruik van 
 - Periodes naar keuze, gegroepeerd per dag, week of maand, met export naar CSV (Excel).
 - Kwartierpiek per maand en de facturatiepiek (gemiddelde van de laatste 12 maandpieken, minimum 2,5 kW), als indicatie voor het capaciteitstarief van Fluvius.
 - Tarief per kWh met historiek: elke dag wordt gerekend tegen het tarief dat toen gold.
+- Meters apart of samen bekijken (bijvoorbeeld om het verbruik van een deel van het gebouw door te rekenen).
+- Evenementen: een periode (van datum en uur tot datum en uur) op een of meer meters, met organisator en eigen prijs per kWh. Verbruik per kwartier, meterstanden bij begin en einde, en een PDF-afrekening op naam van TrefpuntFestival vzw met plaats voor handtekeningen. Evenementen en PDF enkel voor beheerders.
 
 ## Installatie
 

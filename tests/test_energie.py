@@ -132,13 +132,15 @@ async def test_kwartieren_overnemen(hass, setup, monkeypatch):
     en = hass.data[DOMAIN]
     q0 = int(dt_util.utcnow().timestamp()) // 900 * 900 - 1800
 
-    async def fake(start, end, period):
-        assert period == "5minute"
-        return ({"voorbouw": {q0: 0.1, q0 + 300: 0.1, q0 + 600: 0.1}, "achterbouw": {q0: 0.2, q0 + 300: 0.2, q0 + 600: 0.2}}, {})
+    async def fake(start, end, period, with_state=False):
+        assert period == "5minute" and with_state
+        return ({"voorbouw": {q0: 0.1, q0 + 300: 0.1, q0 + 600: 0.1}, "achterbouw": {q0: 0.2, q0 + 300: 0.2, q0 + 600: 0.2}}, {},
+                {"voorbouw": {q0 + 600: 100.3}, "achterbouw": {q0 + 600: 200.6}})
     monkeypatch.setattr(en, "_energy", fake)
     assert await en.import_quarters() == 2
     assert await en.import_quarters() == 2                  # nogmaals: geen dubbels
     assert en.db.between(q0, q0 + 1) == {q0: {"voorbouw": pytest.approx(0.3), "achterbouw": pytest.approx(0.6)}}
+    assert en.db.states(q0, q0 + 1) == {q0: {"voorbouw": 100.3, "achterbouw": 200.6}}
 
 
 async def test_eerste_tarief_uit_oude_helper(hass, setup):
@@ -153,3 +155,69 @@ async def test_config_flow(hass, recorder_mock):
     assert r["errors"] == {"base": "no_meters"}
     r = await hass.config_entries.flow.async_configure(r["flow_id"], {"devices": [dev]})
     assert r["type"] == "create_entry" and r["data"]["meters"][0] == {"id": "voorbouw", "name": "voorbouw", "device_id": dev}
+
+
+async def test_meters_apart(hass, setup):
+    ws = setup["ws"]
+    d = (dt_util.now().date() - timedelta(days=2)).isoformat()
+    r = await ws(type=f"{DOMAIN}/days", start=d, end=d, meters=["achterbouw"])
+    day = r["result"]["days"][0]
+    assert day["meters"] == {"achterbouw": 12.0} and day["total"] == 12.0
+    assert [m["id"] for m in r["result"]["meters"]] == ["achterbouw"] and len(r["result"]["all_meters"]) == 2
+
+
+async def test_evenement_rapport_en_pdf(hass, setup, hass_client, hass_read_only_access_token, hass_ws_client):
+    from homeassistant.setup import async_setup_component
+    ws = setup["ws"]
+    en = hass.data[DOMAIN]
+    d = dt_util.now().date() - timedelta(days=2)
+    s = int(dt_util.start_of_local_day(d).timestamp())
+    # kwartieren van 18u00 tot 23u00 met meterstanden
+    q = {s + 900 * i: {"voorbouw": 0.5, "achterbouw": 0.25} for i in range(96)}
+    st = {s + 900 * i: {"voorbouw": 1000 + 0.5 * (i + 1), "achterbouw": 500 + 0.25 * (i + 1)} for i in range(96)}
+    en.db.upsert(q, st)
+    start = f"{d.isoformat()}T19:07"
+    end = f"{d.isoformat()}T22:52"
+    draft = {"name": "Optreden", "organizer": "Vzw Test", "start": start, "end": end, "meters": ["voorbouw"], "price": 0.45}
+    r = await ws(type=f"{DOMAIN}/event/report", draft=draft)
+    assert r["success"], r
+    rep = r["result"]
+    # 19u00 tot 23u00 = 16 kwartieren x 0,5 kWh = 8 kWh
+    assert rep["resolution"] == "kwartier" and rep["total"] == 8.0 and rep["amount"] == 3.6
+    m = rep["meters"][0]
+    assert m["begin"] == 1000 + 0.5 * 76 and m["end"] == 1000 + 0.5 * 92 and m["end"] - m["begin"] == 8.0
+    r = await ws(type=f"{DOMAIN}/event/save", **draft)
+    assert r["success"] and r["result"]["event"]["number"].startswith("EV-")
+    eid = r["result"]["event"]["id"]
+    r = await ws(type=f"{DOMAIN}/events")
+    assert r["result"]["events"][0]["total"] == 8.0
+    # zonder eigen prijs: tarief van die dag
+    r = await ws(type=f"{DOMAIN}/event/save", event_id=eid, **{**draft, "price": None})
+    r = await ws(type=f"{DOMAIN}/event/report", event_id=eid)
+    assert r["result"]["price"] == 0.36
+    # einde voor begin: geweigerd
+    r = await ws(type=f"{DOMAIN}/event/save", **{**draft, "end": f"{d.isoformat()}T18:00"})
+    assert not r["success"]
+    # PDF: beheerder wel, gewone gebruiker niet
+    assert await async_setup_component(hass, "http", {})
+    client = await hass_client()
+    resp = await client.get(f"/api/btechnics_energie/evenement/{eid}/pdf")
+    body = await resp.read()
+    assert resp.status == 200 and body.startswith(b"%PDF") and resp.headers["Content-Type"] == "application/pdf"
+    ro = await hass_client(hass_read_only_access_token)
+    assert (await ro.get(f"/api/btechnics_energie/evenement/{eid}/pdf")).status == 403
+    rows = await hass_ws_client(hass, hass_read_only_access_token)
+    await rows.send_json_auto_id({"type": f"{DOMAIN}/events"})
+    assert not (await rows.receive_json())["success"]
+    r = await ws(type=f"{DOMAIN}/event/delete", event_id=eid)
+    assert r["success"] and (await ws(type=f"{DOMAIN}/events"))["result"]["events"] == []
+
+
+async def test_evenement_zonder_kwartieren_per_uur(hass, setup):
+    ws = setup["ws"]
+    d = dt_util.now().date() - timedelta(days=2)
+    draft = {"name": "Expo", "start": f"{d.isoformat()}T10:20", "end": f"{d.isoformat()}T12:40", "meters": ["voorbouw", "achterbouw"]}
+    r = await ws(type=f"{DOMAIN}/event/report", draft=draft)
+    rep = r["result"]
+    # 10u00 tot 13u00 per uur: 3 x (3 + 0,5) kWh
+    assert rep["resolution"] == "uur" and rep["total"] == 10.5 and rep["price"] == 0.36

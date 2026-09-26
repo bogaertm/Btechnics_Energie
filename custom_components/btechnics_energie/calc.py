@@ -23,9 +23,11 @@ class Tariffs:
         return self.items[max(i, 0)]["price"]
 
 
-def quarters_from_5min(rows_by_meter: dict, tz) -> dict:
+def quarters_from_5min(rows_by_meter: dict, tz=None, states: dict | None = None) -> dict:
     """5-minuutstatistieken (change in kWh per sensor, per meter samengeteld) omzetten naar
-    kwartieren: {start_ts_kwartier: {meter: kWh}}. Enkel volledige kwartieren (3 blokken)."""
+    kwartieren: {start_ts_kwartier: {meter: kWh}}. Enkel volledige kwartieren (3 blokken).
+    states (optioneel): {meter: {start_ts_5min: meterstand}}; dan wordt ook states_out gevuld
+    met de meterstand op het einde van elk kwartier: {kwartier: {meter: stand}}."""
     buckets = {}
     for meter, rows in rows_by_meter.items():
         for start, kwh in rows:
@@ -38,7 +40,19 @@ def quarters_from_5min(rows_by_meter: dict, tz) -> dict:
         full = {m: round(v[0], 5) for m, v in meters.items() if len(v[1]) == 3}
         if full and len(full) == len(meters):
             out[q] = full
+    if states is not None:
+        quarter_states = {}
+        for q in out:
+            st = {m: states.get(m, {}).get(q + 600) for m in out[q]}
+            if all(v is not None for v in st.values()):
+                quarter_states[q] = st
+        return out, quarter_states
     return out
+
+
+def quarter_bounds(start: int, end: int) -> tuple:
+    """Begin naar beneden en einde naar boven afronden op het kwartier."""
+    return start - start % 900, end + (-end) % 900
 
 
 def month_peaks(quarters: list) -> dict:

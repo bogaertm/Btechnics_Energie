@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from homeassistant.components.http import KEY_HASS, HomeAssistantView
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_track_time_change
@@ -28,6 +29,8 @@ async def _async_global_setup(hass: HomeAssistant):
         return
     hass.data[GLOBAL_KEY] = True
     async_register_websocket(hass)
+    if getattr(hass, "http", None) is not None:
+        hass.http.register_view(EventPdfView())
     if getattr(hass, "http", None) is None or "frontend" not in hass.config.components:
         return
     from homeassistant.components.frontend import add_extra_js_url
@@ -104,3 +107,31 @@ async def _reload(hass: HomeAssistant, entry: ConfigEntry):
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.data.pop(DOMAIN, None)
     return True
+
+
+class EventPdfView(HomeAssistantView):
+    """PDF-afrekening van een evenement, enkel voor beheerders (de kaart gebruikt een ondertekend pad)."""
+
+    url = "/api/btechnics_energie/evenement/{event_id}/pdf"
+    name = "api:btechnics_energie:evenement_pdf"
+    requires_auth = True
+
+    async def get(self, request, event_id: str):
+        from aiohttp import web
+        from homeassistant.util import dt as dt_util
+        from .pdf import build_pdf
+
+        user = request.get("hass_user")
+        if user is None or not user.is_admin:
+            return web.Response(status=403, text="Enkel voor beheerders")
+        hass = request.app[KEY_HASS]
+        en = hass.data.get(DOMAIN)
+        ev = en.events.get(event_id) if en else None
+        if ev is None:
+            return web.Response(status=404, text="Evenement niet gevonden")
+        report = await en.event_report(ev)
+        data = await hass.async_add_executor_job(
+            build_pdf, report, lambda t: dt_util.as_local(dt_util.utc_from_timestamp(t)), dt_util.now())
+        fname = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in f"{ev.get('number', 'evenement')}-{ev.get('name', '')}")[:80]
+        return web.Response(body=data, content_type="application/pdf",
+                            headers={"Content-Disposition": f'inline; filename="{fname}.pdf"', "Cache-Control": "no-store"})

@@ -109,13 +109,22 @@ const CSS = `
   .kpi.click { cursor: pointer; }
   .kpi.click:hover { outline: 1px solid var(--primary-color); }
   .live { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; margin-bottom: 16px; }
-  .meter { border: 1px solid var(--divider-color); border-radius: 12px; padding: 12px; }
-  .meter .head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-  .meter .name { font-weight: 500; }
-  .meter .p { white-space: nowrap; font-size: 1.5rem; font-weight: 500; font-variant-numeric: tabular-nums; }
-  .ph { display: grid; grid-template-columns: 28px 1fr auto; gap: 8px; align-items: center; font-size: 0.85rem; margin-top: 6px; }
+  .meter { border: 1px solid var(--divider-color); border-radius: 12px; padding: 12px 14px; display: flex; flex-direction: column; min-width: 0; }
+  .meter .head { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
+  .ph.tot { grid-template-columns: 14px minmax(0, 1fr) 76px 52px; }
+  .meter .name { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .meter .p { white-space: nowrap; line-height: 1.2; font-size: 1.6rem; font-weight: 500; font-variant-numeric: tabular-nums; }
+  .ph { display: grid; grid-template-columns: 26px minmax(30px, 1fr) 68px 56px 52px; column-gap: 10px; align-items: center;
+    font-size: 0.9rem; font-variant-numeric: tabular-nums; padding: 5px 0; border-top: 1px solid var(--divider-color); }
+  .ph.hd { border-top: none; font-size: 0.75rem; color: var(--secondary-text-color); padding: 0 0 3px; }
+  .ph .r { text-align: right; white-space: nowrap; }
   .ph .track { height: 8px; background: var(--secondary-background-color); border-radius: 4px; overflow: hidden; }
   .ph .fill { height: 100%; border-radius: 4px; }
+  .seg { display: inline-flex; flex-wrap: wrap; gap: 0; border: 1px solid var(--divider-color); border-radius: 8px; overflow: hidden; }
+  .seg button { font: inherit; border: none; background: none; color: var(--primary-text-color); padding: 7px 12px; cursor: pointer; min-height: 36px; }
+  .seg button + button { border-left: 1px solid var(--divider-color); }
+  .seg button.on { background: var(--primary-color); color: var(--text-primary-color, #fff); }
+  .selbar { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: -6px 0 14px; }
   .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 0.85rem; color: var(--secondary-text-color); margin: 4px 0 6px; }
   .legend span { display: inline-flex; align-items: center; gap: 6px; }
   .sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
@@ -251,7 +260,7 @@ const csvNum = (v, d = 3) => (v == null ? "" : String(Math.round(v * 10 ** d) / 
 
 /* ------------------------------------------------------------------ kaart */
 
-const TABS = [["overzicht", "Overzicht"], ["dag", "Dag"], ["periode", "Periode"], ["pieken", "Pieken"], ["tarieven", "Tarieven"]];
+const TABS = [["overzicht", "Overzicht"], ["dag", "Dag"], ["periode", "Periode"], ["pieken", "Pieken"], ["evenementen", "Evenementen"], ["tarieven", "Tarieven"]];
 const PRESETS = [["month", "Deze maand"], ["prevmonth", "Vorige maand"], ["30", "Laatste 30 dagen"], ["year", "Dit jaar"],
   ["prevyear", "Vorig jaar"], ["custom", "Eigen periode"]];
 
@@ -308,6 +317,7 @@ class BtechnicsEnergieCard extends HTMLElement {
     this.shadowRoot.innerHTML = `<style>${CSS}</style><ha-card>
       <div class="title">${esc(this._config.title || "Energieverbruik")}</div>
       <div class="tabs" id="tabs"></div>
+      <div class="selbar" id="selbar"></div>
       <div id="body"><div class="muted">Laden...</div></div></ha-card>`;
     this._renderTabs();
     this._day = this._today();
@@ -318,6 +328,7 @@ class BtechnicsEnergieCard extends HTMLElement {
     const t = this.shadowRoot.getElementById("tabs");
     t.innerHTML = TABS.map(([k, l]) => `<button class="btn ${this._tab === k ? "active" : ""}" data-tab="${k}" aria-pressed="${this._tab === k}">${l}</button>`).join("");
     t.querySelectorAll("[data-tab]").forEach((b) => b.addEventListener("click", () => { this._tab = b.dataset.tab; this._renderTabs(); this._show(); }));
+    this._renderSel();
   }
   _refresh() {
     if (!this.isConnected || this._busy) return;
@@ -329,8 +340,8 @@ class BtechnicsEnergieCard extends HTMLElement {
     const body = this.shadowRoot.getElementById("body");
     const fail = (e) => { if (seq === this._seq) body.innerHTML = `<div class="error">Kon de gegevens niet laden: ${esc(errText(e))}</div>`; };
     const run = { overzicht: () => this._overview(seq), dag: () => this._dayView(seq), periode: () => this._periodView(seq),
-      pieken: () => this._peaksView(seq), tarieven: () => this._tariffView(seq) }[this._tab];
-    run().catch(fail);
+      pieken: () => this._peaksView(seq), tarieven: () => this._tariffView(seq), evenementen: () => this._eventsView(seq) }[this._tab];
+    return run().catch(fail);
   }
   _goDay(d) {
     this._day = d;
@@ -339,9 +350,54 @@ class BtechnicsEnergieCard extends HTMLElement {
     this._show();
   }
 
+  _short(id) {
+    // kortste herkenbare naam: gemeenschappelijke eerste woorden weglaten ("Speldenstraat Voorbouw" -> "Voorbouw")
+    const all = this._allMeters || [];
+    const m = all.find((x) => x.id === id);
+    if (!m || all.length < 2) return m ? m.name : id;
+    const words = all.map((x) => x.name.split(/\s+/));
+    let k = 0;
+    while (words.every((w) => w.length > k + 1 && w[k] === words[0][k])) k++;
+    return m.name.split(/\s+/).slice(k).join(" ");
+  }
+  _meterIndex(id) {
+    const i = (this._allMeters || []).findIndex((m) => m.id === id);
+    return i < 0 ? 0 : i;
+  }
+  _fileTag() {
+    return this._sel && this._sel.length ? "-" + this._selName().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") : "";
+  }
+  _selArg() { return this._sel && this._sel.length ? { meters: this._sel } : {}; }
+  _selName() {
+    const all = this._allMeters || [];
+    if (!this._sel || !this._sel.length || this._sel.length === all.length) return "alle meters";
+    return all.filter((m) => this._sel.includes(m.id)).map((m) => m.name).join(" en ");
+  }
+  _setAll(list) {
+    if (!list || !list.length) return;
+    const known = (this._allMeters || []).map((m) => m.id).join("|");
+    this._allMeters = list;
+    if (known !== list.map((m) => m.id).join("|")) this._renderSel();
+  }
+  _renderSel() {
+    const el = this.shadowRoot.getElementById("selbar");
+    if (!el) return;
+    const all = this._allMeters || [];
+    const show = all.length > 1 && ["overzicht", "dag", "periode", "pieken"].includes(this._tab);
+    if (!show) { el.innerHTML = ""; return; }
+    const cur = this._sel && this._sel.length === 1 ? this._sel[0] : "";
+    el.innerHTML = `<span class="muted">Meters</span><div class="seg" role="group" aria-label="Meters">
+      <button class="${cur ? "" : "on"}" data-sel="" aria-pressed="${!cur}">Alle meters</button>
+      ${all.map((m) => `<button class="${cur === m.id ? "on" : ""}" data-sel="${esc(m.id)}" aria-pressed="${cur === m.id}">${esc(m.name)}</button>`).join("")}</div>`;
+    el.querySelectorAll("[data-sel]").forEach((b) => b.addEventListener("click", () => {
+      this._sel = b.dataset.sel ? [b.dataset.sel] : null;
+      this._renderSel();
+      this._show();
+    }));
+  }
   _legend(meters) {
     const c = this._colors;
-    return `<div class="legend">${meters.map((m, i) => `<span><i class="sw" style="background:${c[i % c.length]}"></i>${esc(m.name)}</span>`).join("")}</div>`;
+    return `<div class="legend">${meters.map((m) => `<span><i class="sw" style="background:${c[this._meterIndex(m.id) % c.length]}"></i>${esc(m.name)}</span>`).join("")}</div>`;
   }
   _meterSplit(meters, per, fmt = (v) => kwh(v, 2)) {
     return meters.map((m) => `${esc(m.name)}: <b>${fmt(per[m.id])}</b>`).join("<br>");
@@ -351,9 +407,11 @@ class BtechnicsEnergieCard extends HTMLElement {
   async _overview(seq) {
     const today = this._today();
     const start = [D.add(today, -40), `${Number(today.slice(0, 4)) - 1}-12-25`, D.prevMonthStart(today)].sort()[0];
-    const [res, pk] = await Promise.all([this._ws({ type: `${DOMAIN}/days`, start, end: today }), this._ws({ type: `${DOMAIN}/peaks` })]);
+    const [res, pk] = await Promise.all([this._ws({ type: `${DOMAIN}/days`, start, end: today, ...this._selArg() }),
+      this._ws({ type: `${DOMAIN}/peaks`, ...this._selArg() })]);
     if (seq !== this._seq) return;
     this._ov = res;
+    this._setAll(res.all_meters);
     this._meters = res.meters;
     const byDate = Object.fromEntries(res.days.map((d) => [d.date, d]));
     const sum = (a, b) => {
@@ -395,7 +453,7 @@ class BtechnicsEnergieCard extends HTMLElement {
     const c = this._colors;
     barChart(body.querySelector("#c30"), {
       labels: days.map((d) => `${Number(d.slice(8))}/${Number(d.slice(5, 7))}`),
-      series: res.meters.map((m, i) => ({ name: m.name, color: c[i % c.length], values: days.map((d) => (byDate[d] ? byDate[d].meters[m.id] || 0 : 0)) })),
+      series: res.meters.map((m, i) => ({ name: m.name, color: c[this._meterIndex(m.id) % c.length], values: days.map((d) => (byDate[d] ? byDate[d].meters[m.id] || 0 : 0)) })),
       tip: (i) => { const x = byDate[days[i]]; return `<b>${dayLabel(days[i])}</b><br>${x ? `${kwh(x.total, 2)}, ${eur(x.cost)}<br>${this._meterSplit(res.meters, x.meters)}` : "geen gegevens"}`; },
       onClick: (i) => this._goDay(days[i]),
     });
@@ -412,14 +470,21 @@ class BtechnicsEnergieCard extends HTMLElement {
       const w = ph.reduce((s, x) => s + (x.w || 0), 0);
       if (ph.some((x) => x.w != null)) { total += w; any = true; }
       const maxA = Math.max(16, ...ph.map((x) => x.a || 0));
-      return `<div class="meter"><div class="head"><span class="name"><i class="sw" style="background:${c[i % c.length]}"></i> ${esc(m.name)}</span>
+      const col = c[this._meterIndex(m.id) % c.length];
+      return `<div class="meter"><div class="head"><span class="name" title="${esc(m.name)}"><i class="sw" style="background:${col}"></i> ${esc(m.name)}</span>
         <span class="p">${ph.some((x) => x.w != null) ? kw(w / 1000) : "-"}</span></div>
-        ${ph.map((x) => `<div class="ph"><span class="muted">L${x.p}</span><div class="track"><div class="fill" style="width:${Math.min(100, ((x.a || 0) / maxA) * 100)}%;background:${c[i % c.length]}"></div></div>
-          <span>${x.w != null ? `${N2.format(x.w / 1000)} kW` : "-"} <span class="muted">${x.a != null ? `${N1.format(x.a)} A` : ""}${x.v != null ? `, ${N0.format(x.v)} V` : ""}</span></span></div>`).join("")}
+        <div class="ph hd"><span>Fase</span><span>Stroom</span><span class="r">Vermogen</span><span class="r">Stroom</span><span class="r">Spanning</span></div>
+        ${ph.map((x) => `<div class="ph"><span class="muted">L${x.p}</span><div class="track" title="${x.a != null ? N1.format(x.a) + " A" : ""}"><div class="fill" style="width:${Math.min(100, ((x.a || 0) / maxA) * 100)}%;background:${col}"></div></div>
+          <span class="r">${x.w != null ? `${N2.format(x.w / 1000)} kW` : "-"}</span><span class="r">${x.a != null ? `${N1.format(x.a)} A` : "-"}</span><span class="r">${x.v != null ? `${N0.format(x.v)} V` : "-"}</span></div>`).join("")}
       </div>`;
     }).join("");
-    el.innerHTML = cards + (this._meters.length > 1 ? `<div class="meter"><div class="head"><span class="name">Totaal nu</span><span class="p">${any ? kw(total / 1000) : "-"}</span></div>
-      <div class="note">Som van alle meters, live. Een kwartier op dit vermogen: ${any ? kwh(total / 4000, 2) : "-"}.</div></div>` : "");
+    const shown = this._meters.length;
+    el.innerHTML = cards + (shown > 1 ? `<div class="meter"><div class="head"><span class="name">Totaal nu</span><span class="p">${any ? kw(total / 1000) : "-"}</span></div>
+      <div class="ph hd tot"><span></span><span>Meter</span><span class="r">Vermogen</span><span class="r">Aandeel</span></div>
+      ${this._meters.map((m) => { const w = ["1", "2", "3"].reduce((s2, p) => s2 + (num(m.power[p]) || 0), 0);
+        return `<div class="ph tot"><span><i class="sw" style="background:${c[this._meterIndex(m.id) % c.length]}"></i></span><span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(m.name)}">${esc(this._short(m.id))}</span>
+          <span class="r">${N2.format(w / 1000)} kW</span><span class="r">${total > 0 ? N0.format((w / total) * 100) + " %" : "-"}</span></div>`; }).join("")}
+      <div class="note">Een kwartier op dit vermogen: ${any ? kwh(total / 4000, 2) : "-"}.</div></div>` : "");
   }
 
   /* ---------------- dag ---------------- */
@@ -429,6 +494,13 @@ class BtechnicsEnergieCard extends HTMLElement {
     if (!body.querySelector("#daynav")) body.innerHTML = `<div class="muted">Laden...</div>`;
     const res = await this._ws({ type: `${DOMAIN}/day`, date: d });
     if (seq !== this._seq) return;
+    if (!this._allMeters) this._setAll(res.meters);
+    if (this._sel && this._sel.length) {
+      const keep = (per) => Object.fromEntries(Object.entries(per).filter(([m]) => this._sel.includes(m)));
+      res.meters = res.meters.filter((m) => this._sel.includes(m.id));
+      res.hours = res.hours.map((h) => ({ ...h, meters: keep(h.meters) }));
+      res.quarters = res.quarters.map((q) => ({ ...q, meters: keep(q.meters) }));
+    }
     this._meters = res.meters;
     const f = this._fmt, c = this._colors, meters = res.meters, today = this._today();
     const hours = res.hours, quarters = res.quarters;
@@ -450,7 +522,7 @@ class BtechnicsEnergieCard extends HTMLElement {
       <div class="kpis">
         <div class="kpi"><div class="l">Verbruik</div><div class="v">${kwh(total, 2)}</div><div class="l">${d === today ? "tot nu" : "hele dag"}</div></div>
         <div class="kpi"><div class="l">Kost</div><div class="v">${eur(cost)}</div><div class="l">tarief ${res.price != null ? `${EUR4.format(res.price)}/kWh` : "niet ingesteld"}</div></div>
-        ${meters.map((m, i) => `<div class="kpi"><div class="l"><i class="sw" style="background:${c[i % c.length]}"></i> ${esc(m.name)}</div><div class="v">${kwh(tot[m.id], 2)}</div>
+        ${meters.map((m, i) => `<div class="kpi"><div class="l"><i class="sw" style="background:${c[this._meterIndex(m.id) % c.length]}"></i> ${esc(m.name)}</div><div class="v">${kwh(tot[m.id], 2)}</div>
           <div class="l">${res.price != null && tot[m.id] != null ? eur(tot[m.id] * res.price) : ""}</div></div>`).join("")}
         <div class="kpi"><div class="l">Kwartierpiek</div><div class="v">${peak ? kw(peak.kw) : "-"}</div><div class="l">${peak ? `${f.time(peak.ts)} tot ${f.time(peak.ts + 900)}` : "geen kwartiergegevens"}</div></div>
         <div class="kpi"><div class="l">Gemiddeld vermogen</div><div class="v">${kw(total / hrs)}</div><div class="l">over ${N1.format(hrs)} uur</div></div>
@@ -475,11 +547,11 @@ class BtechnicsEnergieCard extends HTMLElement {
     body.querySelectorAll("[data-res]").forEach((b) => b.addEventListener("click", () => { this._res = b.dataset.res; this._drawDay(res); body.querySelectorAll("[data-res]").forEach((x) => x.classList.toggle("active", x === b)); }));
     body.querySelectorAll("[data-phm]").forEach((b) => b.addEventListener("click", () => { this._phMeter = b.dataset.phm; body.querySelectorAll("[data-phm]").forEach((x) => x.classList.toggle("active", x === b)); this._drawPhases(res); }));
     body.querySelectorAll("[data-phk]").forEach((b) => b.addEventListener("click", () => { this._phKind = b.dataset.phk; body.querySelectorAll("[data-phk]").forEach((x) => x.classList.toggle("active", x === b)); this._drawPhases(res); }));
-    body.querySelector("#csvh").addEventListener("click", () => csvDownload(`verbruik-${d}-per-uur.csv`, [
+    body.querySelector("#csvh").addEventListener("click", () => csvDownload(`verbruik-${d}${this._fileTag()}-per-uur.csv`, [
       ["Datum", "Uur", ...meters.map((m) => `${m.name} (kWh)`), "Totaal (kWh)", "Tarief (EUR/kWh)", "Kost (EUR)"],
       ...hours.map((h) => { const t = Object.values(h.meters).reduce((a, b) => a + b, 0);
         return [d, f.time(h.ts), ...meters.map((m) => csvNum(h.meters[m.id])), csvNum(t), csvNum(res.price, 5), csvNum(res.price != null ? t * res.price : null, 4)]; })]));
-    body.querySelector("#csvq").addEventListener("click", () => csvDownload(`verbruik-${d}-per-kwartier.csv`, [
+    body.querySelector("#csvq").addEventListener("click", () => csvDownload(`verbruik-${d}${this._fileTag()}-per-kwartier.csv`, [
       ["Datum", "Kwartier", ...meters.map((m) => `${m.name} (kWh)`), "Totaal (kWh)", "Vermogen (kW)"],
       ...quarters.map((q) => { const t = Object.values(q.meters).reduce((a, b) => a + b, 0);
         return [d, `${f.time(q.ts)}-${f.time(q.ts + 900)}`, ...meters.map((m) => csvNum(q.meters[m.id])), csvNum(t), csvNum(t * 4)]; })]));
@@ -505,7 +577,7 @@ class BtechnicsEnergieCard extends HTMLElement {
       labels: slots.map((t) => (quarter ? f.time(t) : f.time(t).slice(0, 2) + "u")),
       every: quarter ? 8 : 2,
       unit: quarter ? "kW" : "kWh",
-      series: meters.map((m, i) => ({ name: m.name, color: c[i % c.length], values: slots.map((t) => (map[t] ? (map[t][m.id] || 0) * (quarter ? 4 : 1) : 0)) })),
+      series: meters.map((m, i) => ({ name: m.name, color: c[this._meterIndex(m.id) % c.length], values: slots.map((t) => (map[t] ? (map[t][m.id] || 0) * (quarter ? 4 : 1) : 0)) })),
       tip: (i) => { const t = slots[i], per = map[t];
         if (!per) return `<b>${f.time(t)} tot ${f.time(t + step)}</b><br>geen gegevens`;
         const s = Object.values(per).reduce((a, b) => a + b, 0);
@@ -550,8 +622,9 @@ class BtechnicsEnergieCard extends HTMLElement {
     const body = this.shadowRoot.getElementById("body");
     let [a, b] = this._range();
     if (b < a) [a, b] = [b, a];
-    const res = await this._ws({ type: `${DOMAIN}/days`, start: a, end: b });
+    const res = await this._ws({ type: `${DOMAIN}/days`, start: a, end: b, ...this._selArg() });
     if (seq !== this._seq) return;
+    this._setAll(res.all_meters);
     const meters = res.meters, c = this._colors, p = this._period, f = this._fmt;
     // groeperen per dag, week of maand
     const key = (d) => (p.group === "month" ? d.slice(0, 7) : p.group === "week" ? D.monday(d) : d);
@@ -607,13 +680,13 @@ class BtechnicsEnergieCard extends HTMLElement {
     body.querySelector("#to").addEventListener("change", (e) => e.target.value && set("to", e.target.value));
     body.querySelector("#find").addEventListener("change", (e) => e.target.value && this._goDay(e.target.value));
     body.querySelectorAll("[data-day]").forEach((e) => e.addEventListener("click", () => this._goDay(e.dataset.day)));
-    body.querySelector("#csv").addEventListener("click", () => csvDownload(`verbruik-${a}-tot-${b}-${p.group === "month" ? "per-maand" : p.group === "week" ? "per-week" : "per-dag"}.csv`, [
+    body.querySelector("#csv").addEventListener("click", () => csvDownload(`verbruik-${a}-tot-${b}${this._fileTag()}-${p.group === "month" ? "per-maand" : p.group === "week" ? "per-week" : "per-dag"}.csv`, [
       [p.group === "month" ? "Maand" : p.group === "week" ? "Week vanaf" : "Datum", ...meters.map((m) => `${m.name} (kWh)`), "Totaal (kWh)", "Tarief (EUR/kWh)", "Kost (EUR)", "Kwartierpiek (kW)", "Piek op"],
       ...list.map((g) => [p.group === "month" ? g.key : g.key.split("-").reverse().join("/"), ...meters.map((m) => csvNum(g.per[m.id])), csvNum(g.kwh),
         g.prices.size === 1 ? csvNum([...g.prices][0], 5) : "", csvNum(g.cost, 2), g.peak ? csvNum(g.peak.kw) : "", g.peak ? f.dateTime(g.peak.ts) : ""])]));
     barChart(body.querySelector("#cper"), {
       labels: list.map(short),
-      series: meters.map((m, i) => ({ name: m.name, color: c[i % c.length], values: list.map((g) => g.per[m.id] || 0) })),
+      series: meters.map((m, i) => ({ name: m.name, color: c[this._meterIndex(m.id) % c.length], values: list.map((g) => g.per[m.id] || 0) })),
       tip: (i) => { const g = list[i]; return `<b>${esc(label(g))}</b><br>${kwh(g.kwh, p.group === "day" ? 2 : 1)}, ${eur(g.cost)}<br>${this._meterSplit(meters, g.per)}`; },
       onClick: p.group === "day" ? (i) => this._goDay(list[i].key) : null,
     });
@@ -621,8 +694,9 @@ class BtechnicsEnergieCard extends HTMLElement {
 
   /* ---------------- pieken ---------------- */
   async _peaksView(seq) {
-    const res = await this._ws({ type: `${DOMAIN}/peaks` });
+    const res = await this._ws({ type: `${DOMAIN}/peaks`, ...this._selArg() });
     if (seq !== this._seq) return;
+    this._setAll(res.all_meters);
     const body = this.shadowRoot.getElementById("body"), f = this._fmt, c = this._colors;
     const cur = this._today().slice(0, 7);
     const mp = res.months.find((m) => m.month === cur);
@@ -658,6 +732,180 @@ class BtechnicsEnergieCard extends HTMLElement {
     } else {
       body.querySelector("#cpk").innerHTML = `<div class="empty">Nog geen kwartiergegevens.</div>`;
     }
+  }
+
+  /* ---------------- evenementen ---------------- */
+  async _eventsView(seq) {
+    const body = this.shadowRoot.getElementById("body");
+    if (!this._isAdmin) { body.innerHTML = `<div class="note">Evenementen zijn enkel zichtbaar voor beheerders.</div>`; return; }
+    if (this._evOpen) return this._eventForm(seq);
+    const res = await this._ws({ type: `${DOMAIN}/events` });
+    if (seq !== this._seq) return;
+    this._setAll(res.meters);
+    this._evMeta = res;
+    const names = Object.fromEntries(res.meters.map((m) => [m.id, m.name]));
+    const when = (iso) => this._isoLabel(iso);
+    body.innerHTML = `
+      <div class="bar"><button class="btn primary" id="evnew">Nieuw evenement</button><span style="flex:1"></span>
+        <input type="search" id="evq" placeholder="Zoek evenement of organisator" value="${esc(this._evQ || "")}" style="min-width:220px"></div>
+      <div class="scroll"><table><thead><tr><th>Referentie</th><th>Evenement</th><th>Organisator</th><th>Periode</th><th>Meters</th>
+        <th class="num">Verbruik</th><th class="num">Bedrag</th><th></th></tr></thead><tbody id="evrows"></tbody></table></div>
+      <div class="note">Een evenement is een periode (van datum en uur tot datum en uur) op een of meer meters. Het verbruik wordt per kwartier opgeteld; begin en einde worden afgerond op het volle kwartier. De PDF is een afrekening op naam van TrefpuntFestival vzw met plaats voor handtekeningen.</div>`;
+    const draw = () => {
+      const q = (this._evQ || "").toLowerCase();
+      const list = res.events.filter((e) => !q || `${e.name} ${e.organizer || ""} ${e.number}`.toLowerCase().includes(q));
+      body.querySelector("#evrows").innerHTML = list.map((e) => `<tr>
+        <td style="white-space:nowrap">${esc(e.number)}</td><td><button class="link" data-ev="${esc(e.id)}">${esc(e.name)}</button></td>
+        <td>${esc(e.organizer || "")}</td><td style="white-space:nowrap">${when(e.start)}<br><span class="muted">tot ${when(e.end)}</span></td>
+        <td>${(e.meters || []).map((m) => esc(names[m] || m)).join(", ")}</td>
+        <td class="num">${e.total != null ? kwh(e.total, 2) : "-"}</td><td class="num">${e.amount != null ? eur(e.amount) : "-"}</td>
+        <td class="num"><button class="btn" data-pdf="${esc(e.id)}">PDF</button></td></tr>`).join("")
+        || `<tr><td colspan="8" class="empty">${res.events.length ? "Niets gevonden." : "Nog geen evenementen. Maak er een met Nieuw evenement."}</td></tr>`;
+      body.querySelectorAll("[data-ev]").forEach((b) => b.addEventListener("click", () => { this._evOpen = b.dataset.ev; this._show(); }));
+      body.querySelectorAll("[data-pdf]").forEach((b) => b.addEventListener("click", () => this._pdf(b.dataset.pdf, b)));
+    };
+    draw();
+    body.querySelector("#evq").addEventListener("input", (e) => { this._evQ = e.target.value; draw(); });
+    body.querySelector("#evnew").addEventListener("click", () => { this._evOpen = "new"; this._show(); });
+  }
+  _isoLabel(iso) {
+    // "2026-09-19T19:07+02:00" -> "Za 19 sep 2026, 19u07" (de tijd staat al in de tijdzone van Home Assistant)
+    if (!iso) return "-";
+    return `${dayLabel(iso.slice(0, 10))}, ${iso.slice(11, 13)}u${iso.slice(14, 16)}`;
+  }
+  async _pdf(id, btn) {
+    const old = btn ? btn.textContent : "";
+    if (btn) { btn.disabled = true; btn.textContent = "PDF maken..."; }
+    try {
+      const r = await this._hass.fetchWithAuth(`/api/btechnics_energie/evenement/${encodeURIComponent(id)}/pdf`);
+      if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+      const blob = await r.blob();
+      const name = (/filename="([^"]+)"/.exec(r.headers.get("Content-Disposition") || "") || [])[1] || "afrekening.pdf";
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+    } catch (e) {
+      const m = this.shadowRoot.getElementById("evmsg");
+      const txt = `PDF maken mislukt: ${errText(e)}`;
+      if (m) { m.className = "msg error"; m.textContent = txt; } else if (btn) btn.title = txt;
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = old; }
+    }
+  }
+  async _eventForm(seq) {
+    const body = this.shadowRoot.getElementById("body");
+    const meta = this._evMeta || await this._ws({ type: `${DOMAIN}/events` });
+    if (seq !== this._seq) return;
+    this._evMeta = meta;
+    this._setAll(meta.meters);
+    const isNew = this._evOpen === "new";
+    const ev = isNew ? null : meta.events.find((e) => e.id === this._evOpen);
+    if (!isNew && !ev) { this._evOpen = null; return this._show(); }
+    const today = this._today();
+    const e = ev || { name: "", organizer: "", contact: "", start: `${today}T19:00`, end: `${today}T23:00`, meters: [meta.meters[0] && meta.meters[0].id], price: null, note: "" };
+    const tariff = (() => { const d = (e.start || today).slice(0, 10); let p = null;
+      for (const t of (meta.tariffs || []).slice().sort((a, b) => (a.from < b.from ? -1 : 1))) if (t.from <= d || p == null) p = t.price; return p; })();
+    body.innerHTML = `
+      <div class="bar"><button class="btn" id="evback">&lsaquo; Alle evenementen</button><span class="daytitle">${isNew ? "Nieuw evenement" : `${esc(e.number)} ${esc(e.name)}`}</span></div>
+      <div class="panel">
+        <div class="row"><label style="flex:1 1 260px">Naam van het evenement *<br><input id="f_name" type="text" value="${esc(e.name)}" style="width:100%" maxlength="200"></label>
+          <label style="flex:1 1 220px">Organisator<br><input id="f_org" type="text" value="${esc(e.organizer || "")}" style="width:100%" maxlength="200"></label>
+          <label style="flex:1 1 220px">Contact (naam, telefoon of e-mail)<br><input id="f_contact" type="text" value="${esc(e.contact || "")}" style="width:100%" maxlength="300"></label></div>
+        <div class="row"><label>Begin<br><input id="f_start" type="datetime-local" value="${esc((e.start || "").slice(0, 16))}"></label>
+          <label>Einde<br><input id="f_end" type="datetime-local" value="${esc((e.end || "").slice(0, 16))}"></label>
+          <label>Prijs per kWh (EUR)<br><input id="f_price" type="number" step="0.0001" min="0" max="5" inputmode="decimal" style="width:150px"
+            value="${e.price != null ? e.price : ""}" placeholder="${tariff != null ? String(tariff).replace(".", ",") + " (tarief)" : ""}"></label>
+          <span>Meters<br>${meta.meters.map((m) => `<label style="margin-right:12px;white-space:nowrap"><input type="checkbox" class="f_m" value="${esc(m.id)}" ${(e.meters || []).includes(m.id) ? "checked" : ""}> ${esc(m.name)}</label>`).join("")}</span></div>
+        <div class="row"><label style="flex:1">Opmerking (komt op de PDF)<br><textarea id="f_note" rows="2" maxlength="2000" style="width:100%;font:inherit;box-sizing:border-box;border:1px solid var(--divider-color);border-radius:8px;padding:8px;background:var(--card-background-color);color:var(--primary-text-color)">${esc(e.note || "")}</textarea></label></div>
+        <div class="row"><button class="btn primary" id="evsave">Opslaan</button>
+          <button class="btn" id="evpdf" ${isNew ? "disabled title=\"Eerst opslaan\"" : ""}>PDF</button>
+          ${isNew ? "" : `<button class="btn" id="evdel">Verwijderen</button>`}<span id="evmsg" class="msg"></span></div>
+        <div class="note">Laat de prijs leeg om het tarief van die dag te gebruiken${tariff != null ? ` (nu ${EUR4.format(tariff)} per kWh)` : ""}.</div>
+      </div>
+      <div id="evrep"><div class="muted">Berekenen...</div></div>`;
+    const $ = (id) => body.querySelector(id);
+    const msg = $("#evmsg");
+    const form = () => {
+      const price = String($("#f_price").value).trim().replace(",", ".");
+      return { name: $("#f_name").value.trim(), organizer: $("#f_org").value.trim(), contact: $("#f_contact").value.trim(),
+        start: $("#f_start").value, end: $("#f_end").value, meters: [...body.querySelectorAll(".f_m:checked")].map((x) => x.value),
+        price: price === "" ? null : Number(price), note: $("#f_note").value };
+    };
+    const check = (d, forSave) => {
+      if (forSave && !d.name) return "Geef het evenement een naam.";
+      if (!d.start || !d.end) return "Kies een begin en een einde.";
+      if (d.end <= d.start) return "Het einde moet na het begin liggen.";
+      if (!d.meters.length) return "Kies minstens een meter.";
+      if (d.price != null && !(Number.isFinite(d.price) && d.price >= 0 && d.price <= 5)) return "Prijs per kWh tussen 0 en 5 EUR.";
+      return null;
+    };
+    const calc = async () => {
+      const d = form(), err = check(d, false);
+      const rep = $("#evrep");
+      if (err) { rep.innerHTML = `<div class="note">${esc(err)}</div>`; return; }
+      const my = (this._evCalc = (this._evCalc || 0) + 1);
+      try {
+        const r = await this._ws({ type: `${DOMAIN}/event/report`, draft: { ...d, name: d.name || "Evenement" } });
+        if (my === this._evCalc && this.isConnected) this._drawEventReport(rep, r);
+      } catch (e2) { if (my === this._evCalc) rep.innerHTML = `<div class="error">${esc(errText(e2))}</div>`; }
+    };
+    let deb;
+    body.querySelectorAll("input, textarea").forEach((x) => x.addEventListener(x.type === "text" || x.tagName === "TEXTAREA" ? "change" : "input",
+      () => { clearTimeout(deb); deb = setTimeout(calc, 400); }));
+    $("#evback").addEventListener("click", () => { this._evOpen = null; this._evMeta = null; this._show(); });
+    $("#evsave").addEventListener("click", async () => {
+      const d = form(), err = check(d, true);
+      if (err) { msg.className = "msg error"; msg.textContent = err; return; }
+      $("#evsave").disabled = true;
+      try {
+        const r = await this._ws({ type: `${DOMAIN}/event/save`, ...(isNew ? {} : { event_id: ev.id }), ...d });
+        this._evOpen = r.event.id;
+        this._evMeta = null;
+        await this._show();
+        const m2 = this.shadowRoot.getElementById("evmsg");
+        if (m2) { m2.className = "msg ok"; m2.textContent = "Opgeslagen"; }
+      } catch (e2) { msg.className = "msg error"; msg.textContent = `Niet gelukt: ${errText(e2)}`; $("#evsave").disabled = false; }
+    });
+    if (!isNew) {
+      $("#evpdf").addEventListener("click", () => this._pdf(ev.id, $("#evpdf")));
+      $("#evdel").addEventListener("click", async () => {
+        if ($("#evdel").dataset.sure !== "1") { $("#evdel").dataset.sure = "1"; $("#evdel").textContent = "Zeker verwijderen?"; return; }
+        try { await this._ws({ type: `${DOMAIN}/event/delete`, event_id: ev.id }); this._evOpen = null; this._evMeta = null; this._show(); }
+        catch (e2) { msg.className = "msg error"; msg.textContent = `Niet gelukt: ${errText(e2)}`; }
+      });
+    }
+    calc();
+  }
+  _drawEventReport(el, r) {
+    const f = this._fmt, c = this._colors;
+    const meters = r.meters;
+    const mins = Math.round((r.to - r.from) / 60);
+    el.innerHTML = `
+      <div class="kpis">
+        <div class="kpi"><div class="l">Verbruik</div><div class="v">${kwh(r.total, 2)}</div><div class="l">${f.dateTime(r.from)} tot ${f.time(r.to)}${f.isoOf(r.to - 1) !== f.isoOf(r.from) ? ` (${dayLabel(f.isoOf(r.to - 1))})` : ""}</div></div>
+        <div class="kpi"><div class="l">Prijs per kWh</div><div class="v">${r.price != null ? EUR4.format(r.price) : "-"}</div><div class="l">${r.event.price != null ? "eigen prijs" : "tarief van die dag"}</div></div>
+        <div class="kpi"><div class="l">Bedrag</div><div class="v">${eur(r.amount)}</div><div class="l">zoals op de PDF</div></div>
+        <div class="kpi"><div class="l">Duur</div><div class="v">${Math.floor(mins / 60)}u${two(mins % 60)}</div><div class="l">afgerond op het ${r.resolution}</div></div>
+        <div class="kpi"><div class="l">Kwartierpiek</div><div class="v">${r.peak ? kw(r.peak.kw) : "-"}</div><div class="l">${r.peak ? f.time(r.peak.ts) + " tot " + f.time(r.peak.ts + 900) : ""}</div></div>
+      </div>
+      <div class="scroll"><table><thead><tr><th>Meter</th><th class="num">Meterstand begin</th><th class="num">Meterstand einde</th><th class="num">Verbruik</th><th class="num">Bedrag</th></tr></thead><tbody>
+        ${meters.map((m) => `<tr><td><i class="sw" style="background:${c[this._meterIndex(m.id) % c.length]}"></i> ${esc(m.name)}</td>
+          <td class="num">${m.begin != null ? kwh(m.begin, 2) : "-"}</td><td class="num">${m.end != null ? kwh(m.end, 2) : "-"}</td>
+          <td class="num">${kwh(m.kwh, 2)}</td><td class="num">${r.price != null ? eur(m.kwh * r.price) : "-"}</td></tr>`).join("")}
+      </tbody>${meters.length > 1 ? `<tfoot><tr><td>Totaal</td><td></td><td></td><td class="num">${kwh(r.total, 2)}</td><td class="num">${eur(r.amount)}</td></tr></tfoot>` : ""}</table></div>
+      <h3>Verloop per ${r.resolution}</h3>${this._legend(meters)}<div class="chart" id="evchart"></div>
+      <div class="note">${r.resolution === "kwartier" ? "Som van de kwartierwaarden tussen begin en einde, afgerond op het volle kwartier. De meterstanden zijn de stand van de meter (som van de drie fasen) op dat moment."
+        : "Voor deze periode zijn er geen kwartierwaarden; het verbruik is per uur opgeteld, begin en einde afgerond op het volle uur. Meterstanden zijn dan niet beschikbaar."}</div>`;
+    const quarter = r.step === 900;
+    barChart(el.querySelector("#evchart"), {
+      labels: r.series.map((x) => f.time(x.ts)), unit: quarter ? "kW" : "kWh", every: quarter ? 4 : 1,
+      series: meters.map((m) => ({ name: m.name, color: c[this._meterIndex(m.id) % c.length], values: r.series.map((x) => (x.meters[m.id] || 0) * (quarter ? 4 : 1)) })),
+      tip: (i) => { const x = r.series[i]; const sum = Object.values(x.meters).reduce((a, b) => a + b, 0);
+        return `<b>${f.dateTime(x.ts)} tot ${f.time(x.ts + r.step)}</b><br>${kwh(sum, 3)}${quarter ? `, gemiddeld ${kw(sum * 4)}` : ""}<br>${this._meterSplit(meters, x.meters, (v) => kwh(v, 3))}`; },
+    });
   }
 
   /* ---------------- tarieven ---------------- */

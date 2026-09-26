@@ -10,7 +10,7 @@
     "frontend",
     "lovelace"
   ],
-  "version": "0.1.2",
+  "version": "0.2.0",
   "documentation": "https://github.com/bogaertm/Btechnics_Energie",
   "issue_tracker": "https://github.com/bogaertm/Btechnics_Energie/issues",
   "codeowners": [
@@ -19,5 +19,5 @@
   "config_flow": true,
   "single_config_entry": true,
   "iot_class": "calculated",
-  "requirements": []
+  "requirements": ["fpdf2==2.8.8"]
 }
