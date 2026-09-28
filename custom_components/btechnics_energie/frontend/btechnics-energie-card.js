@@ -1102,33 +1102,48 @@ class BtechnicsEnergieCard extends HTMLElement {
 }
 
 // Home Assistant laadt deze module soms voor de kaartregistratie klaar is: veilig definieren.
-const CARD_VERSION = "0.3.2";
+const CARD_VERSION = "0.3.3";
 // Een oude kopie van de pagina (service worker) kan eerst een oudere versie van dit script laden
 // (vastgesteld 26/09/2026: v0.2.2 uit de cache voor v0.3.0). Een custom element kan niet opnieuw gedefinieerd
 // worden: de al geregistreerde klasse laten steunen op deze code en bestaande kaarten opnieuw opbouwen.
 function upgradeCard(reg) {
-  const R = reg.get("btechnics-energie");
-  if (!R || R.__btxVersion === CARD_VERSION || R.prototype instanceof BtechnicsEnergieCard) return;
+  // kandidaten: de geregistreerde klasse en de klassen van de kaarten die echt op de pagina staan (met een
+  // scoped registry is dat niet altijd dezelfde; vastgesteld bij Btechnics VTO op 28/09/2026)
+  const cands = new Set([reg.get("btechnics-energie")]);
+  const find = (root) => {
+    for (const el of root.querySelectorAll("*")) {
+      if (el.tagName === "BTECHNICS-ENERGIE") cands.add(el.constructor);
+      if (el.shadowRoot) find(el.shadowRoot);
+    }
+  };
+  find(document);
   const v = (x) => String(x || "0").split(".").map(Number);
-  const [a, b] = [v(CARD_VERSION), v(R.__btxVersion)];
-  const i = a.findIndex((n, k) => n !== (b[k] || 0));
-  if (R.__btxVersion && (i < 0 || a[i] < (b[i] || 0))) return;     // enkel naar een nieuwere versie
-  try {
-    Object.setPrototypeOf(R.prototype, BtechnicsEnergieCard.prototype);
-    Object.setPrototypeOf(R, BtechnicsEnergieCard);
-    R.__btxVersion = CARD_VERSION;
-    const walk = (root) => {
-      for (const el of root.querySelectorAll("*")) {
-        if (el.tagName === "BTECHNICS-ENERGIE" && el._hass) {
-          clearInterval(el._timer);
-          el._timer = null;
-          try { el._init(); } catch (e) { /* volgende kaart */ }
-        }
-        if (el.shadowRoot) walk(el.shadowRoot);
+  let changed = false;
+  for (const R of cands) {
+    if (!R || !R.prototype || R.prototype instanceof BtechnicsEnergieCard) continue;
+    const [a, b] = [v(CARD_VERSION), v(R.__btxVersion)];
+    const i = a.findIndex((n, k) => n !== (b[k] || 0));
+    if (R.__btxVersion && (i < 0 || a[i] < (b[i] || 0))) continue;     // enkel naar een nieuwere versie
+    try {
+      Object.setPrototypeOf(R.prototype, BtechnicsEnergieCard.prototype);
+      Object.setPrototypeOf(R, BtechnicsEnergieCard);
+      R.__btxVersion = CARD_VERSION;
+      changed = true;
+    } catch (e) { /* oude versie laten staan */ }
+  }
+  if (!changed) return;
+  const walk = (root) => {
+    for (const el of root.querySelectorAll("*")) {
+      if (el.tagName === "BTECHNICS-ENERGIE" && el._hass) {
+        el._fmt = makeFmt(el._hass.config && el._hass.config.time_zone);
+        clearInterval(el._timer);
+        el._timer = null;
+        try { el._init(); } catch (e) { /* volgende kaart */ }
       }
-    };
-    walk(document);
-  } catch (e) { /* oude versie laten staan */ }
+      if (el.shadowRoot) walk(el.shadowRoot);
+    }
+  };
+  walk(document);
 }
 function register() {
   const reg = window.customElements;
