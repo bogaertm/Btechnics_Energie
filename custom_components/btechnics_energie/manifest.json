@@ -10,7 +10,7 @@
     "frontend",
     "lovelace"
   ],
-  "version": "0.3.3",
+  "version": "0.3.4",
   "documentation": "https://github.com/bogaertm/Btechnics_Energie",
   "issue_tracker": "https://github.com/bogaertm/Btechnics_Energie/issues",
   "codeowners": [

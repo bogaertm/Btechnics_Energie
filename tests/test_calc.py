@@ -21,3 +21,17 @@ def test_maandpiek_en_facturatiepiek():
     # augustus 2,0 kW telt als het minimum 2,5 kW
     assert billing_peak(["2026-08", "2026-09"], peaks) == 3.65
     assert billing_peak([], {}) is None
+
+
+def test_onderbreking_verdeeld_over_de_ontbrekende_uren():
+    from custom_components.btechnics_energie.calc import spread_gaps
+    H = 3600
+    # 3 uur gegevens, 4 uur onbereikbaar, dan 1 uur met het hele inhaalverbruik (10 kWh)
+    ser = {0: 1.0, H: 1.0, 2 * H: 1.0, 7 * H: 10.0, 8 * H: 1.0}
+    out, est = spread_gaps(ser)
+    assert [out[i * H] for i in range(3, 8)] == [2.0] * 5          # 10 kWh over 5 uren (4 ontbrekend + inhaaluur)
+    assert est == {i * H for i in range(3, 8)}
+    assert abs(sum(out.values()) - sum(ser.values())) < 1e-9      # totaal blijft gelijk
+    assert spread_gaps({0: 1.0, H: 2.0})[1] == set()                # geen gat: niets geschat
+    long = {0: 1.0, 200 * H: 50.0}
+    assert spread_gaps(long)[0] == long                              # gat langer dan 7 dagen: niet raden

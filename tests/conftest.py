@@ -25,3 +25,13 @@ def clean_db():
     _rm()
     yield
     _rm()
+
+
+@pytest.fixture(autouse=True)
+def detach_errorlog():
+    yield
+    import logging
+    from custom_components.btechnics_energie.errorlog import ErrorLog
+    lg = logging.getLogger("custom_components.btechnics_energie")
+    for h in [h for h in lg.handlers if isinstance(h, ErrorLog)]:
+        lg.removeHandler(h)

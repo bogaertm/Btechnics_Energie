@@ -89,3 +89,25 @@ def billing_peak(months: list, peaks: dict) -> float | None:
     if not last:
         return None
     return round(sum(max(peaks[m]["kw"], MIN_MONTH_PEAK_KW) for m in last) / len(last), 3)
+
+
+def spread_gaps(series: dict, step: int = 3600, max_steps: int = 7 * 24) -> tuple[dict, set]:
+    """Uren zonder statistiek (meter even onbereikbaar, Home Assistant uit) opvullen.
+
+    Na zo'n gat bevat het eerste uur met gegevens het hele verbruik van de onderbreking (de meterstand
+    loopt op het toestel gewoon door). Dat verbruik wordt gelijk verdeeld over de ontbrekende uren en dat
+    eerste uur, en die uren worden als geschat gemarkeerd. Enkel tussen twee uren met gegevens en voor
+    gaten tot max_steps uren; het totaal blijft exact hetzelfde.
+    series: {start_ts: kWh}. Geeft (nieuwe series, set van geschatte ts)."""
+    out = dict(series)
+    est = set()
+    keys = sorted(series)
+    for a, b in zip(keys, keys[1:]):
+        n = (b - a) // step
+        if n <= 1 or n > max_steps:
+            continue
+        v = series[b] / n
+        for i in range(1, n + 1):
+            out[a + i * step] = v
+            est.add(a + i * step)
+    return out, est

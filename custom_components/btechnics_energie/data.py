@@ -15,7 +15,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from .calc import Tariffs, billing_peak, gap_quarters, month_peaks, quarter_bounds, quarters_from_5min
+from .calc import Tariffs, billing_peak, gap_quarters, month_peaks, quarter_bounds, quarters_from_5min, spread_gaps
 from .const import STORE_KEY, STORE_VERSION
 from .events import EventStore
 from .meters import device_name, meter_entities
@@ -155,6 +155,32 @@ class Energy:
             return meters, by_ent, states
         return meters, by_ent
 
+    async def _hourly(self, start: datetime, end: datetime):
+        """Uurverbruik per meter en per fase, met opgevulde onderbrekingen (zie calc.spread_gaps).
+        Haalt ook uren voor en na de periode op, zodat een gat aan de rand juist verdeeld wordt.
+        Geeft ({meter: {ts: kWh}}, {entity: {ts: kWh}}, {ts geschat})."""
+        now = dt_util.utcnow()
+        fs = start - timedelta(days=2)
+        fe = min(end + timedelta(days=7, hours=1), now + timedelta(hours=1))
+        if fe <= start:
+            fe = end
+        _, by_ent = await self._energy(fs, max(fe, end), "hour")
+        s_ts, e_ts = start.timestamp(), end.timestamp()
+        est_all = set()
+        ents = {}
+        for e, ser in by_ent.items():
+            full, est = spread_gaps(ser)
+            ents[e] = {ts: v for ts, v in full.items() if s_ts <= ts < e_ts}
+            est_all |= {ts for ts in est if s_ts <= ts < e_ts}
+        meters = {}
+        for mid, ids in self._energy_ids().items():
+            acc = {}
+            for e in ids:
+                for ts, v in ents.get(e, {}).items():
+                    acc[ts] = acc.get(ts, 0.0) + v
+            meters[mid] = acc
+        return meters, ents, est_all
+
     # ---------- kwartieren ----------
     async def import_quarters(self, hours: int = 3) -> int:
         """Volledige kwartieren uit de 5-minuutstatistieken overnemen (dubbel overnemen kan geen kwaad)."""
@@ -196,8 +222,19 @@ class Energy:
         meters_sel: enkel deze meters (totaal en piek over de gekozen meters)."""
         sel = self._sel(meters_sel)
         s, e = self._local_midnight(start), self._local_midnight(end + timedelta(days=1))
-        meters, _ = await self._energy(s, e, "day")
-        meters = {m: v for m, v in meters.items() if m in sel}
+        # per uur (met opgevulde onderbrekingen) en dan per lokale dag, zodat het inhaalverbruik na een
+        # onderbreking bij de juiste dag komt
+        hourly, _, est = await self._hourly(s, e)
+        meters = {}
+        for mid, per in hourly.items():
+            if mid not in sel:
+                continue
+            acc = {}
+            for ts, k in per.items():
+                d = self._local_day(ts)
+                acc[d] = acc.get(d, 0.0) + k
+            meters[mid] = acc
+        est_days = {self._local_day(ts) for ts in est}
         quarters = await self.hass.async_add_executor_job(self.db.between, int(s.timestamp()), int(e.timestamp()))
         gaps = await self.hass.async_add_executor_job(self.db.gaps, int(s.timestamp()), int(e.timestamp()))
         peaks = {}
@@ -211,21 +248,21 @@ class Energy:
         t = self.tariffs
         out, days = [], {}
         for mid, per in meters.items():
-            for ts, k in per.items():
-                days.setdefault(self._local_day(ts), {})[mid] = k
+            for d, k in per.items():
+                days.setdefault(d, {})[mid] = k
         for d in sorted(days):
             per = days[d]
             total = sum(per.values())
             price = t.price(d)
             out.append({"date": d, "meters": {m: round(v, 3) for m, v in per.items()}, "total": round(total, 3),
                         "price": price, "cost": round(total * price, 4) if price is not None else None,
-                        "peak": peaks.get(d)})
+                        "peak": peaks.get(d), **({"estimated": True} if d in est_days else {})})
         return {"days": out, "meters": self._meta(sel), "all_meters": self._meta(), "tariffs": self.tariff_items}
 
     # ---------- een dag in detail ----------
     async def day(self, d: date) -> dict:
         s, e = self._local_midnight(d), self._local_midnight(d + timedelta(days=1))
-        meters, by_ent = await self._energy(s, e, "hour")
+        meters, by_ent, est = await self._hourly(s, e)
         hours = {}
         for mid, per in meters.items():
             for ts, k in per.items():
@@ -253,7 +290,7 @@ class Energy:
                 pm[str(p)] = ph
             phases[m["id"]] = pm
         return {"date": d.isoformat(), "start": int(s.timestamp()), "end": int(e.timestamp()), "price": price,
-                "hours": [{"ts": ts, "meters": per} for ts, per in sorted(hours.items())],
+                "hours": [{"ts": ts, "meters": per, **({"estimated": True} if ts in est else {})} for ts, per in sorted(hours.items())],
                 "quarters": [{"ts": ts, "meters": per, **({"gap": True} if ts in gaps else {})} for ts, per in sorted(quarters.items())],
                 "phase_period": period, "phases": phases, "meters": self._meta()}
 

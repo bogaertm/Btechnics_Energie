@@ -18,7 +18,7 @@ def _energy(hass):
 @callback
 def async_register(hass: HomeAssistant):
     for cmd in (ws_days, ws_day, ws_peaks, ws_tariff_set, ws_tariff_delete,
-                ws_events, ws_event_save, ws_event_delete, ws_event_report):
+                ws_events, ws_event_save, ws_event_delete, ws_event_report, ws_errors):
         websocket_api.async_register_command(hass, cmd)
 
 
@@ -223,3 +223,18 @@ async def ws_event_report(hass, connection, msg):
         connection.send_error(msg["id"], "invalid_format", str(err))
         return
     connection.send_result(msg["id"], rep)
+
+
+
+@websocket_api.require_admin
+@websocket_api.websocket_command({vol.Required("type"): f"{DOMAIN}/errors",
+                                  vol.Optional("days", default=60): vol.All(vol.Coerce(int), vol.Range(min=1, max=60))})
+@websocket_api.async_response
+async def ws_errors(hass, connection, msg):
+    """Foutenlog van de laatste 60 dagen (waarschuwingen en fouten van deze integratie), enkel beheerders."""
+    log = hass.data.get(f"{DOMAIN}_errorlog")
+    if log is None:
+        connection.send_error(msg["id"], "not_ready", "foutenlog niet beschikbaar")
+        return
+    await hass.async_add_executor_job(log.flush_to_db)
+    connection.send_result(msg["id"], await hass.async_add_executor_job(log.query, msg["days"]))

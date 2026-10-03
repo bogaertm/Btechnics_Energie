@@ -7,6 +7,9 @@
  *   Tarieven   prijs per kWh met historiek
  * Zelfde stijl als de kaarten van Btechnics VTO. Tijden in de tijdzone van Home Assistant.
  */
+// geschatte uren: een meter was even onbereikbaar; het inhaalverbruik is gelijk verdeeld over die uren
+const EST_MARK = ' <span class="muted" title="Geschat: de meter was onbereikbaar, het verbruik van die periode is gelijk verdeeld">*</span>';
+const EST_NOTE = "* Geschat: de meter was even onbereikbaar. Het verbruik van die periode (de meterstand liep gewoon door) is gelijk verdeeld over de ontbrekende uren; het totaal klopt.";
 const MONTHS = ["jan", "feb", "mrt", "apr", "mei", "jun", "jul", "aug", "sep", "okt", "nov", "dec"];
 const MONTHS_LONG = ["januari", "februari", "maart", "april", "mei", "juni", "juli", "augustus", "september", "oktober", "november", "december"];
 const DAYS = ["Zo", "Ma", "Di", "Wo", "Do", "Vr", "Za"];
@@ -265,6 +268,34 @@ const csvNum = (v, d = 3) => (v == null ? "" : String(Math.round(v * 10 ** d) / 
 
 /* ------------------------------------------------------------------ kaart */
 
+// foutenlog van 60 dagen (enkel beheerders): waarschuwingen en fouten van deze integratie, ook na een herstart
+function errorLogSection(root, hass, domain, dateTime) {
+  const box = document.createElement("div");
+  box.className = "errlog";
+  box.innerHTML = `<h3 style="font-size:1.05rem;font-weight:500;margin:22px 0 8px">Foutenlog</h3>
+    <p class="muted" style="margin:0 0 8px;font-size:0.9rem">Waarschuwingen en fouten van de laatste 60 dagen, ook na een herstart van Home Assistant. Dezelfde melding op dezelfde dag telt op.</p>
+    <button class="btn" data-errlog>Foutenlog tonen</button><div class="errout"></div>`;
+  root.appendChild(box);
+  const out = box.querySelector(".errout"), btn = box.querySelector("[data-errlog]");
+  const e2 = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  btn.addEventListener("click", async () => {
+    if (out.dataset.open === "1") { out.innerHTML = ""; out.dataset.open = ""; btn.textContent = "Foutenlog tonen"; return; }
+    btn.disabled = true;
+    try {
+      const r = await hass.callWS({ type: `${domain}/errors`, days: 60 });
+      const t = r.totals || {};
+      out.innerHTML = `<p style="margin:10px 0">${r.rows.length ? `<b>${(t.ERROR || 0) + (t.CRITICAL || 0)}</b> fouten en <b>${t.WARNING || 0}</b> waarschuwingen in 60 dagen.` : "Geen waarschuwingen of fouten in de laatste 60 dagen."}</p>
+        ${r.rows.length ? `<div class="scroll"><table><thead><tr><th>Laatst</th><th>Niveau</th><th>Onderdeel</th><th>Melding</th><th class="num">Aantal</th></tr></thead><tbody>
+        ${r.rows.map((x) => `<tr><td style="white-space:nowrap">${e2(dateTime(x.last))}</td><td>${x.level === "WARNING" ? "waarschuwing" : "fout"}</td><td>${e2(x.source)}</td>
+          <td>${x.details ? `<details><summary>${e2(x.message)}</summary><pre style="white-space:pre-wrap;font-size:0.8rem;margin:6px 0 0">${e2(x.details)}</pre></details>` : e2(x.message)}</td>
+          <td class="num">${x.count}</td></tr>`).join("")}</tbody></table></div>` : ""}`;
+      out.dataset.open = "1"; btn.textContent = "Foutenlog verbergen";
+    } catch (e) {
+      out.innerHTML = `<div class="error">Foutenlog laden mislukt: ${e2((e && e.message) || e)}</div>`;
+    } finally { btn.disabled = false; }
+  });
+}
+
 const TABS = [["overzicht", "Overzicht"], ["dag", "Dag"], ["periode", "Periode"], ["pieken", "Pieken"], ["evenementen", "Evenementen"], ["tarieven", "Tarieven"], ["handleiding", "Handleiding"]];
 
 /* ------------------------------------------------------------------ handleiding (gedeelde opbouw)
@@ -383,6 +414,7 @@ const HELP_DOC = {
     { title: "Hoe er gemeten wordt", sub: "Bronnen en beperkingen", html: hpTable([["Meters", "Twee Shelly-energiemeters met drie fasen"], ["Uur, dag, maand", "Statistieken van Home Assistant, vanaf 15 sep 2026"], ["Kwartieren", "Elke 5 minuten overgenomen met de meterstand, vanaf 16 sep 2026"], ["Nauwkeurigheid", "kWh klopt; een kwartierpiek kan wat afwijken van de meter van Fluvius"]]) },
   ],
   terms: [
+    ["Geschat (*)", "De meter was even onbereikbaar. Het verbruik van die periode (de meterstand liep gewoon door) is gelijk verdeeld over de ontbrekende uren; het totaal klopt, de verdeling per uur is een schatting. Kwartierpieken in die periode zijn niet gekend."],
     ["kWh", "Hoeveelheid energie: wat je betaalt per kWh"], ["kW", "Vermogen op een moment: hoe hard er nu verbruikt wordt"],
     ["Kwartierpiek", "Gemiddeld vermogen over het zwaarste kwartier"], ["Facturatiepiek", "Gemiddelde van de maandpieken van 12 maanden, minstens 2,5 kW per maand"],
     ["Fase L1, L2, L3", "De drie fasen van de aansluiting"], ["All-in tarief", "Prijs per kWh inclusief nettarieven, heffingen en btw"],
@@ -690,9 +722,10 @@ class BtechnicsEnergieCard extends HTMLElement {
     const ht = body.querySelector("#htab");
     ht.innerHTML = hours.length ? `<table><thead><tr><th>Uur</th>${meters.map((m) => `<th class="num">${esc(m.name)}</th>`).join("")}<th class="num">Totaal</th><th class="num">Kost</th></tr></thead><tbody>
       ${hours.map((h) => { const t = Object.values(h.meters).reduce((a, b) => a + b, 0);
-        return `<tr><td style="white-space:nowrap">${f.time(h.ts)}<span class="muted"> tot ${f.time(h.ts + 3600)}</span></td>${meters.map((m) => `<td class="num">${kwh(h.meters[m.id], 2)}</td>`).join("")}<td class="num">${kwh(t, 2)}</td><td class="num">${res.price != null ? eur(t * res.price) : "-"}</td></tr>`; }).join("")}
+        return `<tr><td style="white-space:nowrap">${f.time(h.ts)}<span class="muted"> tot ${f.time(h.ts + 3600)}</span>${h.estimated ? EST_MARK : ""}</td>${meters.map((m) => `<td class="num">${kwh(h.meters[m.id], 2)}</td>`).join("")}<td class="num">${kwh(t, 2)}</td><td class="num">${res.price != null ? eur(t * res.price) : "-"}</td></tr>`; }).join("")}
       </tbody><tfoot><tr><td>Totaal</td>${meters.map((m) => `<td class="num">${kwh(tot[m.id], 2)}</td>`).join("")}<td class="num">${kwh(total, 2)}</td><td class="num">${eur(cost)}</td></tr></tfoot></table>`
       : `<div class="empty">Geen verbruik gekend voor deze dag.</div>`;
+    if (hours.some((h) => h.estimated)) ht.insertAdjacentHTML("beforeend", `<div class="note">${EST_NOTE}</div>`);
     this._drawDay(res);
     this._drawPhases(res);
   }
@@ -765,6 +798,7 @@ class BtechnicsEnergieCard extends HTMLElement {
       const g = groups.get(k) || { key: k, kwh: 0, cost: 0, per: {}, days: 0, peak: null, prices: new Set() };
       g.kwh += x.total; g.cost += x.cost || 0; g.days++;
       if (x.price != null) g.prices.add(x.price);
+      if (x.estimated) g.est = true;
       for (const [m, v] of Object.entries(x.meters)) g.per[m] = (g.per[m] || 0) + v;
       if (x.peak && (!g.peak || x.peak.kw > g.peak.kw)) g.peak = x.peak;
       groups.set(k, g);
@@ -795,11 +829,12 @@ class BtechnicsEnergieCard extends HTMLElement {
       ${this._legend(meters)}<div class="chart" id="cper"></div>
       <div class="scroll"><table><thead><tr><th>${p.group === "month" ? "Maand" : p.group === "week" ? "Week" : "Dag"}</th>${meters.map((m) => `<th class="num">${esc(m.name)}</th>`).join("")}
         <th class="num">Totaal</th><th class="num">Tarief</th><th class="num">Kost</th><th class="num">Kwartierpiek</th></tr></thead><tbody>
-        ${list.slice().reverse().map((g) => `<tr><td>${p.group === "day" ? `<button class="link" data-day="${g.key}">${label(g)}</button>` : esc(label(g))}</td>
+        ${list.slice().reverse().map((g) => `<tr><td>${p.group === "day" ? `<button class="link" data-day="${g.key}">${label(g)}</button>` : esc(label(g))}${g.est ? EST_MARK : ""}</td>
           ${meters.map((m) => `<td class="num">${kwh(g.per[m.id], p.group === "day" ? 2 : 1)}</td>`).join("")}<td class="num">${kwh(g.kwh, p.group === "day" ? 2 : 1)}</td>
           <td class="num">${g.prices.size === 1 ? EUR4.format([...g.prices][0]) : g.prices.size ? "meerdere" : "-"}</td><td class="num">${eur(g.cost)}</td>
           <td class="num">${g.peak ? `<button class="link" data-day="${f.isoOf(g.peak.ts)}" title="${esc(f.dateTime(g.peak.ts))}">${kw(g.peak.kw)}</button>` : "-"}</td></tr>`).join("") || `<tr><td colspan="9" class="empty">Geen gegevens in deze periode.</td></tr>`}
       </tbody>${list.length ? `<tfoot><tr><td>Totaal</td>${meters.map((m) => `<td class="num">${kwh(list.reduce((s, g) => s + (g.per[m.id] || 0), 0))}</td>`).join("")}<td class="num">${kwh(tot.kwh)}</td><td></td><td class="num">${eur(tot.cost)}</td><td class="num">${peak ? kw(peak.kw) : ""}</td></tr></tfoot>` : ""}</table></div>
+      ${list.some((g) => g.est) ? `<div class="note">${EST_NOTE}</div>` : ""}
       <div class="note">Met Dag opzoeken open je meteen een dag met verbruik en prijs per uur. Gegevens zijn beschikbaar vanaf de eerste dag dat de meters in Home Assistant zaten.</div>`;
     const set = (k, v) => { this._period[k] = v; this._show(); };
     body.querySelector("#preset").addEventListener("change", (e) => {
@@ -1061,6 +1096,7 @@ class BtechnicsEnergieCard extends HTMLElement {
     const body = this.shadowRoot.getElementById("body");
     body.innerHTML = helpHtml(HELP_DOC);
     wireHelp(body, HELP_DOC, (tab) => { this._tab = tab; this._renderTabs(); this._show(); });
+    if (this._isAdmin) errorLogSection(body, this._hass, DOMAIN, (ts) => this._fmt.dateTime(ts));
   }
 
   /* ---------------- tarieven ---------------- */
@@ -1102,7 +1138,7 @@ class BtechnicsEnergieCard extends HTMLElement {
 }
 
 // Home Assistant laadt deze module soms voor de kaartregistratie klaar is: veilig definieren.
-const CARD_VERSION = "0.3.3";
+const CARD_VERSION = "0.3.4";
 // Een oude kopie van de pagina (service worker) kan eerst een oudere versie van dit script laden
 // (vastgesteld 26/09/2026: v0.2.2 uit de cache voor v0.3.0). Een custom element kan niet opnieuw gedefinieerd
 // worden: de al geregistreerde klasse laten steunen op deze code en bestaande kaarten opnieuw opbouwen.

@@ -28,6 +28,12 @@ async def _async_global_setup(hass: HomeAssistant):
     if hass.data.get(GLOBAL_KEY):
         return
     hass.data[GLOBAL_KEY] = True
+    try:
+        # foutenlog van 60 dagen (system_log van Home Assistant begint bij elke herstart opnieuw)
+        from .errorlog import async_setup_errorlog
+        await async_setup_errorlog(hass, DOMAIN)
+    except Exception:  # noqa: BLE001  de foutenlog is een hulpmiddel
+        _LOGGER.exception("Foutenlog kon niet geopend worden")
     async_register_websocket(hass)
     if getattr(hass, "http", None) is not None:
         hass.http.register_view(EventPdfView())
