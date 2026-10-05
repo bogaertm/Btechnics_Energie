@@ -1138,7 +1138,7 @@ class BtechnicsEnergieCard extends HTMLElement {
 }
 
 // Home Assistant laadt deze module soms voor de kaartregistratie klaar is: veilig definieren.
-const CARD_VERSION = "0.3.4";
+const CARD_VERSION = "0.3.5";
 // Een oude kopie van de pagina (service worker) kan eerst een oudere versie van dit script laden
 // (vastgesteld 26/09/2026: v0.2.2 uit de cache voor v0.3.0). Een custom element kan niet opnieuw gedefinieerd
 // worden: de al geregistreerde klasse laten steunen op deze code en bestaande kaarten opnieuw opbouwen.
